@@ -1,4 +1,4 @@
-# 🍓 AgroScan - Sistema Inteligente de Inspección Fitosanitaria en Fresa
+# AgroScan - Sistema Inteligente de Inspección Fitosanitaria en Fresa
 
 **Proyecto de Investigación e Innovación Tecnológica • Tecsup**
 
@@ -6,7 +6,7 @@ AgroScan es un sistema integral de agricultura de precisión diseñado para el m
 
 ---
 
-## 📱 Arquitectura del Sistema
+##Arquitectura del Sistema
 
 El ecosistema está compuesto por tres componentes sincronizados:
 
@@ -31,7 +31,7 @@ El ecosistema está compuesto por tres componentes sincronizados:
 
 ---
 
-## 🚀 Puesta en Marcha
+##Puesta en Marcha
 
 ### 1. Backend (FastAPI + Gemini)
 ```bash
@@ -57,7 +57,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
-## 👨‍💻 Autores e Institución
+##Autores e Institución
 * **Instituto Tecnológico Tecsup**
 * **Investigador / Desarrollador:** Max Muñoz (`maxmunoz-debug`)
-* **Proyecto:** AgroScan (Investigación Tecnológica Aplicada al Agro)
+* **Proyecto:** AgroScan 
