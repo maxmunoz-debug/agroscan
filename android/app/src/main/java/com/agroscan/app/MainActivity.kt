@@ -2,6 +2,7 @@ package com.agroscan.app
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.agroscan.app.data.AgroScanResult
+import com.agroscan.app.data.EvaluacionCreateRequest
 import com.agroscan.app.data.EvaluacionHistorial
 import com.agroscan.app.data.LoteItem
 import com.agroscan.app.data.NetworkClient
@@ -41,9 +43,12 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 enum class AppScreen {
     LOGIN,
@@ -76,47 +81,95 @@ fun AgroScanApp() {
     val gson = remember { Gson() }
 
     var userName by remember { mutableStateOf(prefs.getString("user_name", "") ?: "") }
+    var userEmail by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
     var currentParcela by remember { mutableStateOf("Lote 1 (Parcela Norte) • Fresa Albión") }
 
-    // FUENTE PERSISTENTE DE LOTES (Se guardan en memoria permanente del teléfono)
-    val lotesJson = prefs.getString("lotes_json", null)
-    val lotesCargados = remember {
-        if (!lotesJson.isNullOrBlank()) {
-            try {
-                val type = object : TypeToken<List<LoteItem>>() {}.type
-                gson.fromJson<List<LoteItem>>(lotesJson, type) ?: emptyList()
-            } catch (_: Exception) {
-                emptyList()
+    fun getLotesKey(email: String): String {
+        val sanitized = email.trim().lowercase().replace("@", "_").replace(".", "_")
+        return if (sanitized.isNotBlank()) "lotes_json_$sanitized" else "lotes_json"
+    }
+
+    fun getHistorialKey(email: String): String {
+        val sanitized = email.trim().lowercase().replace("@", "_").replace(".", "_")
+        return if (sanitized.isNotBlank()) "historial_json_$sanitized" else "historial_json"
+    }
+
+    fun guardarBitmapMuestra(id: String, bmp: Bitmap?): String? {
+        if (bmp == null) return null
+        return try {
+            val dir = File(context.filesDir, "evaluaciones")
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, "eval_$id.jpg")
+            FileOutputStream(file).use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
             }
-        } else {
-            emptyList()
+            file.absolutePath
+        } catch (_: Exception) {
+            null
         }
     }
 
-    val listaLotesCompartida = remember {
-        mutableStateListOf(
-            *if (lotesCargados.isNotEmpty()) {
-                lotesCargados.toTypedArray()
-            } else {
-                arrayOf(
-                    LoteItem(1, "Lote 1", "Albión", "Parcela Norte", "Óptimo", "Hoy 08:30 AM", latitud = -12.046374, longitud = -77.042793),
-                    LoteItem(2, "Lote 2", "Monterrey", "Sector Sur", "Óptimo", "Ayer 16:00 PM", latitud = -12.046500, longitud = -77.042900)
-                )
-            }
-        )
-    }
-
-    // Persistencia reactiva: guarda cambios automáticamente cada vez que se agrega/edita/elimina un lote
-    LaunchedEffect(listaLotesCompartida.size, listaLotesCompartida.map { "${it.id}-${it.nombre}-${it.latitud}-${it.longitud}-${it.fotoUri}" }) {
-        val json = gson.toJson(listaLotesCompartida.toList())
-        prefs.edit().putString("lotes_json", json).apply()
-    }
-
+    val listaLotesCompartida = remember { mutableStateListOf<LoteItem>() }
     val papeleraLotesCompartida = remember { mutableStateListOf<LoteItem>() }
     val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial>() }
 
+    fun cargarDatosDeUsuario(email: String) {
+        listaLotesCompartida.clear()
+        val lotesKey = getLotesKey(email)
+        val lotesRaw = prefs.getString(lotesKey, null)
+        if (!lotesRaw.isNullOrBlank()) {
+            try {
+                val type = object : TypeToken<List<LoteItem>>() {}.type
+                val list: List<LoteItem> = gson.fromJson(lotesRaw, type) ?: emptyList()
+                listaLotesCompartida.addAll(list)
+            } catch (_: Exception) {}
+        }
+        if (listaLotesCompartida.isEmpty()) {
+            val defaultLotes = listOf(
+                LoteItem(1, "Lote 1 (Parcela Norte)", "Albión", "Sector General", "Óptimo", "Sin evaluar", latitud = -12.046374, longitud = -77.042793),
+                LoteItem(2, "Lote 2 (Parcela Sur)", "Monterrey", "Sector General", "Óptimo", "Sin evaluar", latitud = -12.046500, longitud = -77.042900)
+            )
+            listaLotesCompartida.addAll(defaultLotes)
+            prefs.edit().putString(lotesKey, gson.toJson(defaultLotes)).apply()
+        }
+
+        listaHistorialCompartida.clear()
+        val histKey = getHistorialKey(email)
+        val histRaw = prefs.getString(histKey, null)
+        if (!histRaw.isNullOrBlank()) {
+            try {
+                val type = object : TypeToken<List<EvaluacionHistorial>>() {}.type
+                val list: List<EvaluacionHistorial> = gson.fromJson(histRaw, type) ?: emptyList()
+                listaHistorialCompartida.addAll(list)
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Inicializar datos al montar si el usuario ya tenía sesión abierta
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotBlank()) {
+            cargarDatosDeUsuario(userEmail)
+        }
+    }
+
+    // Persistencia reactiva de parcelas exclusiva por usuario
+    LaunchedEffect(listaLotesCompartida.size, listaLotesCompartida.map { "${it.id}-${it.nombre}-${it.latitud}-${it.longitud}-${it.fotoUri}" }, userEmail) {
+        if (userEmail.isNotBlank() && listaLotesCompartida.isNotEmpty()) {
+            val json = gson.toJson(listaLotesCompartida.toList())
+            prefs.edit().putString(getLotesKey(userEmail), json).apply()
+        }
+    }
+
+    // Persistencia reactiva del historial exclusiva por usuario
+    LaunchedEffect(listaHistorialCompartida.size, userEmail) {
+        if (userEmail.isNotBlank()) {
+            val json = gson.toJson(listaHistorialCompartida.toList())
+            prefs.edit().putString(getHistorialKey(userEmail), json).apply()
+        }
+    }
+
     var currentScreen by remember {
-        mutableStateOf(if (userName.isNotEmpty()) AppScreen.HOME else AppScreen.LOGIN)
+        mutableStateOf(if (userName.isNotEmpty() && userEmail.isNotEmpty()) AppScreen.HOME else AppScreen.LOGIN)
     }
 
     BackHandler(enabled = (currentScreen != AppScreen.HOME && currentScreen != AppScreen.LOGIN)) {
@@ -154,14 +207,13 @@ fun AgroScanApp() {
                 isLoading = false
                 Toast.makeText(
                     context,
-                    "Error conectando con AgroScan Backend: ${e.localizedMessage ?: "Verifica que el servidor esté corriendo"}",
+                    "Error conectando con AgroScan Backend: ${e.localizedMessage ?: "Verifica que el servidor esté activo"}",
                     Toast.LENGTH_LONG
                 ).show()
             }
         }
     }
 
-    // Lanzador para CARGAR FOTOS de la galería
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -173,7 +225,6 @@ fun AgroScanApp() {
                 val source = ImageDecoder.createSource(context.contentResolver, uri)
                 ImageDecoder.decodeBitmap(source)
             }
-            // Enviar directamente la foto cargada al modelo de IA
             enviarFotoAlServidor(bitmap)
         }
     }
@@ -194,9 +245,15 @@ fun AgroScanApp() {
             // 1. PANTALLA DE LOGIN
             AppScreen.LOGIN -> {
                 LoginScreen(
-                    onLoginExitoso = { nombreIngresado ->
+                    onLoginExitoso = { nombreIngresado, emailIngresado, rolIngresado ->
                         userName = nombreIngresado
-                        prefs.edit().putString("user_name", nombreIngresado).apply()
+                        userEmail = emailIngresado
+                        prefs.edit()
+                            .putString("user_name", nombreIngresado)
+                            .putString("user_email", emailIngresado)
+                            .putString("user_role", rolIngresado)
+                            .apply()
+                        cargarDatosDeUsuario(emailIngresado)
                         currentScreen = AppScreen.HOME
                     }
                 )
@@ -217,7 +274,7 @@ fun AgroScanApp() {
                 )
             }
 
-            // 3. GESTIÓN DE LOTES (Con Barra Inferior Permanente)
+            // 3. GESTIÓN DE LOTES
             AppScreen.LOTES -> {
                 LotesScreen(
                     lotes = listaLotesCompartida,
@@ -239,7 +296,7 @@ fun AgroScanApp() {
                 )
             }
 
-            // 4. REPORTE FITOSANITARIO CON FUNGICIDAS
+            // 4. REPORTE FITOSANITARIO
             AppScreen.REPORT -> {
                 scanResult?.let { result ->
                     ReportScreen(
@@ -278,18 +335,54 @@ fun AgroScanApp() {
                                 )
                             }
 
+                            val evalId = UUID.randomUUID().toString()
+                            val fotoPath = guardarBitmapMuestra(evalId, selectedBitmap)
                             val horaCompleta = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
-                            listaHistorialCompartida.add(
-                                0,
-                                EvaluacionHistorial(
-                                    fechaHora = horaCompleta,
-                                    loteNombre = "${lote.nombre} (${lote.ubicacion})",
-                                    variedad = variedad,
-                                    notas = notas,
-                                    resultado = result,
-                                    bitmap = selectedBitmap
-                                )
+
+                            val nuevaEvaluacion = EvaluacionHistorial(
+                                id = evalId,
+                                fechaHora = horaCompleta,
+                                loteNombre = "${lote.nombre} (${lote.ubicacion})",
+                                variedad = variedad,
+                                notas = notas,
+                                resultado = result,
+                                bitmap = selectedBitmap,
+                                fotoPath = fotoPath,
+                                latitud = lote.latitud,
+                                longitud = lote.longitud
                             )
+
+                            listaHistorialCompartida.add(0, nuevaEvaluacion)
+
+                            if (userEmail.isNotBlank()) {
+                                prefs.edit()
+                                    .putString(getLotesKey(userEmail), gson.toJson(listaLotesCompartida.toList()))
+                                    .putString(getHistorialKey(userEmail), gson.toJson(listaHistorialCompartida.toList()))
+                                    .apply()
+
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    try {
+                                        NetworkClient.api.guardarEvaluacion(
+                                            EvaluacionCreateRequest(
+                                                usuario_email = userEmail,
+                                                lote_id = lote.id,
+                                                lote_nombre = lote.nombre,
+                                                variedad = variedad,
+                                                fruta = result.fruta,
+                                                madurez_porcentaje = result.madurezPorcentaje,
+                                                color_predominante = result.colorPredominante,
+                                                defectos_detectados = result.defectosDetectados,
+                                                semaforo = result.semaforo,
+                                                dictamen = result.dictamen,
+                                                recomendacion = result.recomendacion,
+                                                fungicidas_sugeridos = result.fungicidasSugeridos,
+                                                medidas_preventivas = result.medidasPreventivas,
+                                                notas = notas
+                                            )
+                                        )
+                                    } catch (_: Exception) {}
+                                }
+                            }
 
                             currentParcela = "${lote.nombre} (${lote.ubicacion}) • Fresa $variedad"
 
@@ -301,13 +394,39 @@ fun AgroScanApp() {
                             currentScreen = AppScreen.HOME
                         },
                         onVolver = {
+                            // Auto-guardado de seguridad para que ningún escaneo se pierda aunque el usuario presione volver
+                            val yaGuardado = listaHistorialCompartida.any {
+                                it.resultado.dictamen == result.dictamen && it.resultado.madurezPorcentaje == result.madurezPorcentaje
+                            }
+                            if (!yaGuardado) {
+                                val loteActual = listaLotesCompartida.firstOrNull() ?: LoteItem(1, "Lote 1 (Parcela Norte)", "Albión", "Sector General", "Óptimo", "Sin evaluar")
+                                val evalId = UUID.randomUUID().toString()
+                                val fotoPath = guardarBitmapMuestra(evalId, selectedBitmap)
+                                val horaCompleta = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
+                                val autoEval = EvaluacionHistorial(
+                                    id = evalId,
+                                    fechaHora = horaCompleta,
+                                    loteNombre = "${loteActual.nombre} (${loteActual.ubicacion})",
+                                    variedad = loteActual.variedad,
+                                    notas = "Auto-guardado al escanear",
+                                    resultado = result,
+                                    bitmap = selectedBitmap,
+                                    fotoPath = fotoPath
+                                )
+                                listaHistorialCompartida.add(0, autoEval)
+                                if (userEmail.isNotBlank()) {
+                                    prefs.edit()
+                                        .putString(getHistorialKey(userEmail), gson.toJson(listaHistorialCompartida.toList()))
+                                        .apply()
+                                }
+                            }
                             currentScreen = AppScreen.HOME
                         }
                     )
                 }
             }
 
-            // 5. AJUSTES DEL SISTEMA (Con Barra Inferior Permanente)
+            // 5. AJUSTES DEL SISTEMA
             AppScreen.SETTINGS -> {
                 SettingsScreen(
                     userName = userName,
@@ -323,8 +442,15 @@ fun AgroScanApp() {
                         prefs.edit().putString("server_url", nuevaUrl).apply()
                     },
                     onCerrarSesion = {
-                        prefs.edit().remove("user_name").apply()
+                        prefs.edit()
+                            .remove("user_name")
+                            .remove("user_email")
+                            .remove("user_role")
+                            .apply()
                         userName = ""
+                        userEmail = ""
+                        listaLotesCompartida.clear()
+                        listaHistorialCompartida.clear()
                         currentScreen = AppScreen.LOGIN
                     },
                     onIrInicio = { currentScreen = AppScreen.HOME },
@@ -342,7 +468,12 @@ fun AgroScanApp() {
                     userName = userName,
                     onVerReporteDetalle = { evaluacionSeleccionada ->
                         scanResult = evaluacionSeleccionada.resultado
-                        selectedBitmap = evaluacionSeleccionada.bitmap
+                        selectedBitmap = evaluacionSeleccionada.bitmap ?: if (!evaluacionSeleccionada.fotoPath.isNullOrBlank()) {
+                            try {
+                                val f = File(evaluacionSeleccionada.fotoPath)
+                                if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+                            } catch (_: Exception) { null }
+                        } else null
                         currentScreen = AppScreen.REPORT
                     },
                     onDispararCamara = { abrirCamaraConGps() },
@@ -353,7 +484,7 @@ fun AgroScanApp() {
                 )
             }
 
-            // 7. CÁMARA INTELIGENTE IN-APP (CameraX + ImageAnalysis en 1 Solo Paso)
+            // 7. CÁMARA INTELIGENTE
             AppScreen.CAMERA -> {
                 CameraInAppScreen(
                     loteActivo = currentParcela,
@@ -365,7 +496,6 @@ fun AgroScanApp() {
                         enviarFotoAlServidor(bitmapAutoRecortado)
                     },
                     onSeleccionarDeGaleria = {
-                        // Cargar foto de galería
                         galleryLauncher.launch("image/*")
                     },
                     onVolver = {
@@ -374,60 +504,46 @@ fun AgroScanApp() {
                 )
             }
 
-            // 8. ENCUADRE Y RECORTE MANUAL (Fallback)
+            // 8. RECORTE DE IMAGEN
             AppScreen.CROP -> {
-                uncroppedBitmap?.let { rawBitmap ->
+                uncroppedBitmap?.let { bmp ->
                     CropScreen(
-                        originalBitmap = rawBitmap,
-                        onCropConfirmed = { croppedBitmap ->
-                            enviarFotoAlServidor(croppedBitmap)
+                        originalBitmap = bmp,
+                        onCropConfirmed = { croppedBmp ->
+                            enviarFotoAlServidor(croppedBmp)
                         },
                         onRetake = {
-                            uncroppedBitmap = null
-                            abrirCamaraConGps()
+                            currentScreen = AppScreen.CAMERA
                         },
                         onCancel = {
-                            currentScreen = AppScreen.HOME
+                            currentScreen = AppScreen.CAMERA
                         }
                     )
-                } ?: run {
-                    currentScreen = AppScreen.HOME
                 }
             }
         }
 
-        // Modal de Carga con IA (Animación de Análisis)
+        // Diálogo de carga al analizar con la IA
         if (isLoading) {
-            Dialog(onDismissRequest = { }) {
+            Dialog(onDismissRequest = {}) {
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = AgroCardWhite,
-                    shadowElevation = 8.dp,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 8.dp,
                     modifier = Modifier.padding(16.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        CircularProgressIndicator(
-                            color = AgroGreenPrimary,
-                            strokeWidth = 4.dp,
-                            modifier = Modifier.size(50.dp)
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Analizando con Gemini AI...",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = AgroGreenPrimary
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Inspeccionando Botrytis cinerea, madurez y dosificación fitosanitaria...",
-                            fontSize = 12.sp,
-                            color = TextGray,
-                            lineHeight = 16.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            text = "Analizando muestra fitopatológica...",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }

@@ -62,7 +62,8 @@ data class EvaluacionHistorial(
     val variedad: String,
     val notas: String = "",
     val resultado: AgroScanResult,
-    val bitmap: Bitmap? = null,
+    @Transient var bitmap: Bitmap? = null,
+    val fotoPath: String? = null,
     val latitud: Double? = null,
     val longitud: Double? = null
 )

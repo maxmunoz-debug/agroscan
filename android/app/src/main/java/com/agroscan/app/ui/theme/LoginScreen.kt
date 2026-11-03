@@ -54,7 +54,7 @@ enum class AuthModo {
  */
 @Composable
 fun LoginScreen(
-    onLoginExitoso: (nombreUsuario: String) -> Unit
+    onLoginExitoso: (nombreUsuario: String, emailUsuario: String, rol: String) -> Unit
 ) {
     var modoActual by remember { mutableStateOf(AuthModo.LOGIN) }
 
@@ -391,7 +391,7 @@ fun LoginScreen(
                                                 )
                                             }
                                             cargando = false
-                                            onLoginExitoso(response.nombre)
+                                            onLoginExitoso(response.nombre, response.email, response.rol)
                                         } catch (e: HttpException) {
                                             cargando = false
                                             val errorBody = e.response()?.errorBody()?.string()
@@ -444,7 +444,7 @@ fun LoginScreen(
                                                 )
                                             }
                                             cargando = false
-                                            onLoginExitoso(response.nombre)
+                                            onLoginExitoso(response.nombre, response.email, response.rol)
                                         } catch (e: HttpException) {
                                             cargando = false
                                             val errorBody = e.response()?.errorBody()?.string()

@@ -331,6 +331,15 @@ fun HistorialScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     // Foto de la muestra
+                                    val bitmapMuestra = remember(evaluacion.id) {
+                                        evaluacion.bitmap ?: if (!evaluacion.fotoPath.isNullOrBlank()) {
+                                            try {
+                                                val f = java.io.File(evaluacion.fotoPath)
+                                                if (f.exists()) android.graphics.BitmapFactory.decodeFile(f.absolutePath) else null
+                                            } catch (_: Exception) { null }
+                                        } else null
+                                    }
+
                                     Box(
                                         modifier = Modifier
                                             .size(64.dp)
@@ -339,9 +348,9 @@ fun HistorialScreen(
                                             .border(1.dp, AgroCardBorder, RoundedCornerShape(14.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (evaluacion.bitmap != null) {
+                                        if (bitmapMuestra != null) {
                                             Image(
-                                                bitmap = evaluacion.bitmap.asImageBitmap(),
+                                                bitmap = bitmapMuestra.asImageBitmap(),
                                                 contentDescription = "Muestra de fresa",
                                                 contentScale = ContentScale.Crop,
                                                 modifier = Modifier.fillMaxSize()

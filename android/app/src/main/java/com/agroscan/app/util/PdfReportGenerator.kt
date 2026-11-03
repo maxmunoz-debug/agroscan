@@ -169,9 +169,16 @@ object PdfReportGenerator {
         val fotoTamano = 138f
 
         // Foto de la muestra con marco fino sobrio
-        if (evaluacion.bitmap != null) {
+        val bitmapMuestraPdf = evaluacion.bitmap ?: if (!evaluacion.fotoPath.isNullOrBlank()) {
             try {
-                val scaled = Bitmap.createScaledBitmap(evaluacion.bitmap, fotoTamano.toInt(), fotoTamano.toInt(), true)
+                val f = java.io.File(evaluacion.fotoPath)
+                if (f.exists()) android.graphics.BitmapFactory.decodeFile(f.absolutePath) else null
+            } catch (_: Exception) { null }
+        } else null
+
+        if (bitmapMuestraPdf != null) {
+            try {
+                val scaled = Bitmap.createScaledBitmap(bitmapMuestraPdf, fotoTamano.toInt(), fotoTamano.toInt(), true)
                 canvas.drawBitmap(scaled, margenIzquierdo, seccionY, null)
 
                 paint.color = bordeSuave

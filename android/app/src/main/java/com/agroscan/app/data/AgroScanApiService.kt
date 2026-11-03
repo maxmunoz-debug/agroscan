@@ -42,11 +42,46 @@ interface AgroScanApiService {
     suspend fun register(
         @Body body: RegisterRequest
     ): AuthResponse
+
+    // 5. Gestión de Lotes y Evaluaciones en la Nube
+    @POST("lotes")
+    suspend fun crearLote(
+        @Body body: LoteCreateRequest
+    ): Map<String, Any>
+
+    @POST("evaluaciones")
+    suspend fun guardarEvaluacion(
+        @Body body: EvaluacionCreateRequest
+    ): Map<String, Any>
 }
+
+data class LoteCreateRequest(
+    val nombre: String,
+    val variedad: String,
+    val ubicacion: String,
+    val usuario_email: String = ""
+)
+
+data class EvaluacionCreateRequest(
+    val usuario_email: String = "",
+    val lote_id: Int? = null,
+    val lote_nombre: String,
+    val variedad: String,
+    val fruta: String = "Fresa",
+    val madurez_porcentaje: Int,
+    val color_predominante: String = "",
+    val defectos_detectados: String = "",
+    val semaforo: String,
+    val dictamen: String,
+    val recomendacion: String = "",
+    val fungicidas_sugeridos: List<String> = emptyList(),
+    val medidas_preventivas: List<String> = emptyList(),
+    val notas: String = ""
+)
 
 object NetworkClient {
     // URL por defecto (puede cambiarse en vivo desde Ajustes)
-    var currentBaseUrl = "http://127.0.0.1:8000/"
+    var currentBaseUrl = "https://agroscan-qqr0.onrender.com/"
         private set
 
     private val okHttpClient = OkHttpClient.Builder()
@@ -84,3 +119,4 @@ object NetworkClient {
         }
     }
 }
+
