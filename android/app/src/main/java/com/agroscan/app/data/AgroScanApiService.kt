@@ -1,4 +1,4 @@
-﻿package com.agroscan.app.data
+package com.agroscan.app.data
 
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -31,6 +31,17 @@ interface AgroScanApiService {
     suspend fun enviarMensajeChat(
         @Body body: ChatRequest
     ): ChatResponse
+
+    // 4. Autenticación Real en SQLite
+    @POST("auth/login")
+    suspend fun login(
+        @Body body: LoginRequest
+    ): AuthResponse
+
+    @POST("auth/register")
+    suspend fun register(
+        @Body body: RegisterRequest
+    ): AuthResponse
 }
 
 object NetworkClient {
@@ -73,7 +84,3 @@ object NetworkClient {
         }
     }
 }
-
-
-
-

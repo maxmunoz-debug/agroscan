@@ -60,4 +60,15 @@ dependencies {
     // Retrofit para conectar con el backend de Python
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+    // Google Play Services Fused Location (Lectura instantánea de ubicación)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    // OSMDroid: Mapa Interactivo Gratis de Código Abierto (Sin cuotas de Google Maps)
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
+
+    // CameraX: Visor In-App de Cámara Integrada
+    val cameraxVersion = "1.4.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
 }

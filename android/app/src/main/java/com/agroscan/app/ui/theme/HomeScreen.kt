@@ -1,6 +1,13 @@
 package com.agroscan.app.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
+
+import com.agroscan.app.R
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -32,12 +39,14 @@ fun HomeScreen(
     historial: List<EvaluacionHistorial> = emptyList(),
     lotes: List<LoteItem> = emptyList(),
     onIniciarEvaluacion: () -> Unit,
+    onCambiarParcela: (String) -> Unit = {},
     onIrHistorial: () -> Unit = {},
     onIrLotes: () -> Unit,
     onIrAjustes: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     var showChatbot by remember { mutableStateOf(false) }
+    var menuLotesDesplegado by remember { mutableStateOf(false) }
 
     // ================= CÁLCULO DE MÉTRICAS DINÁMICAS (CERO HARDCODING) =================
     val totalEvaluaciones = historial.size
@@ -107,116 +116,231 @@ fun HomeScreen(
                 .verticalScroll(scrollState)
                 .padding(20.dp)
         ) {
-            // 1. Encabezado personalizado con el nombre del evaluador
+            // 1. Encabezado Oficial: Logo + Nombre a la izquierda | Perfil interactivo a la derecha
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                // Izquierda: Logo Oficial del Proyecto + agroScan
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(AgroCardWhite)
+                            .padding(4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.agroscan_logo),
+                            contentDescription = "Logo AgroScan",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "AgroScan",
+                        text = "agroScan",
                         fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AgroGreenPrimary
-                    )
-                    Text(
-                        text = "¡Hola, $userName! 🍓",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextDark
-                    )
-                    Text(
-                        text = parcelaActual,
-                        fontSize = 13.sp,
-                        color = TextGray
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AgroGreenPrimary,
+                        letterSpacing = (-0.5).sp
                     )
                 }
 
-                // Monitoreo ambiental / Clima
+                // Derecha: Foto de Perfil + Nombre (sin roles) -> Tocar lleva a Ajustes/Perfil
                 Surface(
+                    onClick = onIrAjustes,
                     shape = RoundedCornerShape(16.dp),
-                    color = AgroCardWhite,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder)
+                    color = Color.Transparent
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.WbSunny,
-                            contentDescription = "Clima",
-                            tint = SemaforoAmarillo,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(AgroGreenPrimary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val context = LocalContext.current
+                            val fotoPerfil = remember { java.io.File(context.filesDir, "perfil_usuario.jpg") }
+                            if (fotoPerfil.exists()) {
+                                Image(
+                                    painter = coil.compose.rememberAsyncImagePainter(fotoPerfil),
+                                    contentDescription = "Foto de perfil",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                val inicial = if (userName.isNotBlank()) userName.first().uppercase() else "U"
+                                Text(
+                                    text = inicial,
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = "24°C • 62% H.",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = TextDark
+                            text = userName,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextDark,
+                            maxLines = 1
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // 2. Tarjeta Principal: NUEVA EVALUACIÓN (Call to action Stitch)
+            // 2. Tarjeta Profesional de Campo: Lote Actual + Clima en Tiempo Real
             Card(
-                onClick = onIniciarEvaluacion,
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = AgroGreenPrimary),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { menuLotesDesplegado = true }
+                    ) {
+                        // Ícono de Ubicación interactivo con indicador desplegable
                         Box(
                             modifier = Modifier
-                                .size(50.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(AgroGreenSecondary),
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.PhotoCamera,
-                                contentDescription = "Cámara",
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = "Cambiar Lote",
                                 tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(20.dp)
                             )
+
+                            // Menú Desplegable con todos los lotes disponibles
+                            DropdownMenu(
+                                expanded = menuLotesDesplegado,
+                                onDismissRequest = { menuLotesDesplegado = false },
+                                modifier = Modifier.background(AgroCardWhite)
+                            ) {
+                                Text(
+                                    text = "Cambiar Parcela Activa:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextGray,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                                HorizontalDivider(thickness = 0.5.dp, color = AgroCardBorder)
+                                lotes.forEach { lote ->
+                                    val textoCompleto = "${lote.nombre} (${lote.ubicacion}) • Fresa ${lote.variedad}"
+                                    val seleccionado = parcelaActual.contains(lote.nombre)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Spa,
+                                                    contentDescription = null,
+                                                    tint = if (seleccionado) SemaforoVerde else TextGray,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = "${lote.nombre} - ${lote.variedad}",
+                                                        fontWeight = if (seleccionado) FontWeight.Bold else FontWeight.Medium,
+                                                        fontSize = 12.sp,
+                                                        color = if (seleccionado) AgroGreenPrimary else TextDark
+                                                    )
+                                                    Text(
+                                                        text = lote.ubicacion,
+                                                        fontSize = 10.sp,
+                                                        color = TextGray
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            onCambiarParcela(textoCompleto)
+                                            menuLotesDesplegado = false
+                                        }
+                                    )
+                                }
+                            }
                         }
-                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = parcelaActual,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Desplegar",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                             Text(
-                                text = "Nueva Evaluación",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Diagnóstico fitosanitario en surco",
-                                fontSize = 12.sp,
+                                text = "Toca para cambiar parcela activa",
+                                fontSize = 10.sp,
                                 color = Color.White.copy(alpha = 0.8f)
                             )
                         }
                     }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = "Ir",
-                        tint = Color.White
-                    )
+
+                    // Clima Integrado
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.15f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WbSunny,
+                                contentDescription = "Clima",
+                                tint = SemaforoAmarillo,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "24°C • 62% H",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
+            Spacer(modifier = Modifier.height(14.dp))
             // Acceso rápido al Asistente Agrónomo IA (Tecsup)
             Surface(
                 onClick = { showChatbot = true },
@@ -329,9 +453,9 @@ fun HomeScreen(
                         Text(
                             text = when {
                                 totalEvaluaciones == 0 -> "Listo para escanear"
-                                porcentajeSanos >= 85 -> "Cosecha óptima 🟢"
-                                porcentajeSanos >= 60 -> "Atención moderada 🟡"
-                                else -> "Alerta fitosanitaria 🔴"
+                                porcentajeSanos >= 85 -> "Cosecha óptima"
+                                porcentajeSanos >= 60 -> "Atención moderada"
+                                else -> "Alerta fitosanitaria"
                             },
                             fontSize = 11.sp,
                             color = TextGray
@@ -432,11 +556,24 @@ fun HomeScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("🟢 ${pctOptimo.toInt()}% Óptimo", fontSize = 11.sp, color = TextDark)
-                            Text("🟡 ${pctRevision.toInt()}% Revisar", fontSize = 11.sp, color = TextDark)
-                            Text("🔴 ${pctCritico.toInt()}% Alerta", fontSize = 11.sp, color = TextDark)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(SemaforoVerde))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("${pctOptimo.toInt()}% Óptimo", fontSize = 11.sp, color = TextDark, fontWeight = FontWeight.Medium)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(SemaforoAmarillo))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("${pctRevision.toInt()}% Revisar", fontSize = 11.sp, color = TextDark, fontWeight = FontWeight.Medium)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(SemaforoRojo))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("${pctCritico.toInt()}% Alerta", fontSize = 11.sp, color = TextDark, fontWeight = FontWeight.Medium)
+                            }
                         }
                     }
                 }
@@ -493,3 +630,4 @@ private data class Quadruple<A, B, C, D>(
     val third: C,
     val fourth: D
 )
+

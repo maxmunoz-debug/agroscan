@@ -50,7 +50,7 @@ fun ChatbotDialog(
     val mensajes = remember {
         mutableStateListOf(
             MensajeChat(
-                texto = "¡Hola! Soy tu Asistente Agrónomo IA de AgroScan (Tecsup) 🍓.\n\nPuedes consultarme sobre:\n• Control y dosis de fungicidas (Switch, Captan, Serenade)\n• Síntomas de Botrytis cinerea y hongos en fresa\n• Manejo en macrotúneles y riego\n• Calibración y enfoque de la cámara ESP32",
+                texto = "¡Hola! Soy el Asistente Agrónomo IA de AgroScan (Tecsup).\n\nPuedes consultarme sobre:\n• Control y dosis de fungicidas (Switch, Captan, Serenade)\n• Síntomas de Botrytis cinerea y hongos en fresa\n• Manejo en macrotúneles y riego\n• Calibración y enfoque de la cámara",
                 esUsuario = false,
                 hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             )
@@ -171,7 +171,7 @@ fun ChatbotDialog(
                                         color = Color.White
                                     )
                                     Text(
-                                        text = "Tecsup • Especialista en Fresas 🟢",
+                                        text = "Tecsup • Asistencia Fitosanitaria",
                                         fontSize = 11.sp,
                                         color = Color.White.copy(alpha = 0.88f)
                                     )
@@ -359,3 +359,4 @@ fun ChatbotDialog(
         }
     }
 }
+

@@ -16,9 +16,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,17 +26,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.agroscan.app.data.AgroScanResult
-import com.agroscan.app.data.LoteItem
 import com.agroscan.app.data.EvaluacionHistorial
-import com.agroscan.app.ui.HistorialScreen
-import com.agroscan.app.ui.CropScreen
+import com.agroscan.app.data.LoteItem
 import com.agroscan.app.data.NetworkClient
-import com.agroscan.app.ui.HomeScreen
-import com.agroscan.app.ui.LoginScreen
-import com.agroscan.app.ui.LotesScreen
-import com.agroscan.app.ui.ReportScreen
-import com.agroscan.app.ui.SettingsScreen
+import com.agroscan.app.ui.*
 import com.agroscan.app.ui.theme.*
+import com.agroscan.app.util.GpsLocationHelper
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -58,7 +52,8 @@ enum class AppScreen {
     LOTES,
     SETTINGS,
     HISTORIAL,
-    CROP
+    CROP,
+    CAMERA
 }
 
 class MainActivity : ComponentActivity() {
@@ -78,18 +73,47 @@ fun AgroScanApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("agroscan_prefs", Context.MODE_PRIVATE) }
+    val gson = remember { Gson() }
 
     var userName by remember { mutableStateOf(prefs.getString("user_name", "") ?: "") }
     var currentParcela by remember { mutableStateOf("Lote 1 (Parcela Norte) • Fresa Albión") }
 
-    // FUENTE ÚNICA DE VERDAD COMPARTIDA ENTRE LOTES Y AJUSTES
+    // FUENTE PERSISTENTE DE LOTES (Se guardan en memoria permanente del teléfono)
+    val lotesJson = prefs.getString("lotes_json", null)
+    val lotesCargados = remember {
+        if (!lotesJson.isNullOrBlank()) {
+            try {
+                val type = object : TypeToken<List<LoteItem>>() {}.type
+                gson.fromJson<List<LoteItem>>(lotesJson, type) ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+    }
+
     val listaLotesCompartida = remember {
         mutableStateListOf(
-            LoteItem(1, "Lote 1", "Albión", "Parcela Norte", "Óptimo", "Hoy 08:30 AM")
+            *if (lotesCargados.isNotEmpty()) {
+                lotesCargados.toTypedArray()
+            } else {
+                arrayOf(
+                    LoteItem(1, "Lote 1", "Albión", "Parcela Norte", "Óptimo", "Hoy 08:30 AM", latitud = -12.046374, longitud = -77.042793),
+                    LoteItem(2, "Lote 2", "Monterrey", "Sector Sur", "Óptimo", "Ayer 16:00 PM", latitud = -12.046500, longitud = -77.042900)
+                )
+            }
         )
     }
+
+    // Persistencia reactiva: guarda cambios automáticamente cada vez que se agrega/edita/elimina un lote
+    LaunchedEffect(listaLotesCompartida.size, listaLotesCompartida.map { "${it.id}-${it.nombre}-${it.latitud}-${it.longitud}-${it.fotoUri}" }) {
+        val json = gson.toJson(listaLotesCompartida.toList())
+        prefs.edit().putString("lotes_json", json).apply()
+    }
+
     val papeleraLotesCompartida = remember { mutableStateListOf<LoteItem>() }
-val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial>() }
+    val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial>() }
 
     var currentScreen by remember {
         mutableStateOf(if (userName.isNotEmpty()) AppScreen.HOME else AppScreen.LOGIN)
@@ -100,7 +124,6 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
     }
 
     var isLoading by remember { mutableStateOf(false) }
-    var showDialogOpciones by remember { mutableStateOf(false) }
 
     var uncroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -138,15 +161,7 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
         }
     }
 
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bitmap: Bitmap? ->
-        if (bitmap != null) {
-            uncroppedBitmap = bitmap
-            currentScreen = AppScreen.CROP
-        }
-    }
-
+    // Lanzador para CARGAR FOTOS de la galería
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -158,9 +173,20 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                 val source = ImageDecoder.createSource(context.contentResolver, uri)
                 ImageDecoder.decodeBitmap(source)
             }
-            uncroppedBitmap = bitmap
-            currentScreen = AppScreen.CROP
+            // Enviar directamente la foto cargada al modelo de IA
+            enviarFotoAlServidor(bitmap)
         }
+    }
+
+    fun abrirCamaraConGps() {
+        GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
+            val loteCercano = GpsLocationHelper.detectarLoteCercano(lat, lon, listaLotesCompartida)
+            loteCercano?.let { (lote, distancia) ->
+                currentParcela = "${lote.nombre} (${lote.ubicacion}) • Fresa ${lote.variedad}"
+                Toast.makeText(context, "Lote detectado por GPS: ${lote.nombre} (${distancia}m)", Toast.LENGTH_SHORT).show()
+            }
+        }
+        currentScreen = AppScreen.CAMERA
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -183,22 +209,15 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                     parcelaActual = currentParcela,
                     historial = listaHistorialCompartida,
                     lotes = listaLotesCompartida,
-                    onIniciarEvaluacion = {
-                        showDialogOpciones = true
-                    },
-                    onIrHistorial = {
-                        currentScreen = AppScreen.HISTORIAL
-                    },
-                    onIrLotes = {
-                        currentScreen = AppScreen.LOTES
-                    },
-                    onIrAjustes = {
-                        currentScreen = AppScreen.SETTINGS
-                    }
+                    onIniciarEvaluacion = { abrirCamaraConGps() },
+                    onCambiarParcela = { nuevaParcela -> currentParcela = nuevaParcela },
+                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
+                    onIrLotes = { currentScreen = AppScreen.LOTES },
+                    onIrAjustes = { currentScreen = AppScreen.SETTINGS }
                 )
             }
 
-            // 3. GESTIÓN DE LOTES (Sincronizada con Ajustes)
+            // 3. GESTIÓN DE LOTES (Con Barra Inferior Permanente)
             AppScreen.LOTES -> {
                 LotesScreen(
                     lotes = listaLotesCompartida,
@@ -210,11 +229,13 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                     },
                     onIniciarEvaluacionEnLote = { loteNombre ->
                         currentParcela = "$loteNombre • Fresa Albión"
-                        showDialogOpciones = true
+                        abrirCamaraConGps()
                     },
-                    onVolver = {
-                        currentScreen = AppScreen.HOME
-                    }
+                    onIrInicio = { currentScreen = AppScreen.HOME },
+                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
+                    onIrAjustes = { currentScreen = AppScreen.SETTINGS },
+                    onDispararCamara = { abrirCamaraConGps() },
+                    onVolver = { currentScreen = AppScreen.HOME }
                 )
             }
 
@@ -228,18 +249,15 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                         loteInicial = currentParcela,
                         userName = userName,
                         onGuardarEvaluacion = { lote, variedad, notas ->
-                            // 1. Determinar el nuevo estado fitosanitario según el semáforo devuelto por la IA
                             val nuevoEstado = when (result.semaforo.lowercase()) {
                                 "rojo" -> "Crítico"
                                 "amarillo" -> "En Revisión"
                                 else -> "Óptimo"
                             }
 
-                            // 2. Formatear la fecha/hora y resumen de evaluación real
                             val horaActual = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
                             val resumenEvaluacion = "$horaActual • Madurez ${result.madurezPorcentaje}% • ${if (result.semaforo.lowercase() == "verde") "Óptima" else result.dictamen}"
 
-                            // 3. Actualizar el lote en la lista compartida en tiempo real
                             val index = listaLotesCompartida.indexOfFirst { it.id == lote.id || it.nombre == lote.nombre }
                             if (index != -1) {
                                 listaLotesCompartida[index] = listaLotesCompartida[index].copy(
@@ -260,7 +278,6 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                                 )
                             }
 
-                            // 4. Guardar en el Historial de Inspecciones
                             val horaCompleta = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
                             listaHistorialCompartida.add(
                                 0,
@@ -274,12 +291,11 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                                 )
                             )
 
-                            // 5. Actualizar la parcela activa en el Dashboard
                             currentParcela = "${lote.nombre} (${lote.ubicacion}) • Fresa $variedad"
 
                             Toast.makeText(
                                 context,
-                                "Evaluación guardada en ${lote.nombre}: Estado $nuevoEstado 🍓",
+                                "Evaluación guardada en ${lote.nombre}: Estado $nuevoEstado",
                                 Toast.LENGTH_LONG
                             ).show()
                             currentScreen = AppScreen.HOME
@@ -291,12 +307,12 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                 }
             }
 
-            // 5. AJUSTES DEL SISTEMA (¡AHORA 100% SINCRONIZADA!)
+            // 5. AJUSTES DEL SISTEMA (Con Barra Inferior Permanente)
             AppScreen.SETTINGS -> {
                 SettingsScreen(
                     userName = userName,
                     serverUrl = NetworkClient.currentBaseUrl,
-                    lotes = listaLotesCompartida, // Le pasamos la lista compartida
+                    lotes = listaLotesCompartida,
                     papeleraLotes = papeleraLotesCompartida,
                     onGuardarNombre = { nuevo ->
                         userName = nuevo
@@ -311,9 +327,11 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                         userName = ""
                         currentScreen = AppScreen.LOGIN
                     },
-                    onVolver = {
-                        currentScreen = AppScreen.HOME
-                    }
+                    onIrInicio = { currentScreen = AppScreen.HOME },
+                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
+                    onIrLotes = { currentScreen = AppScreen.LOTES },
+                    onDispararCamara = { abrirCamaraConGps() },
+                    onVolver = { currentScreen = AppScreen.HOME }
                 )
             }
 
@@ -327,7 +345,7 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                         selectedBitmap = evaluacionSeleccionada.bitmap
                         currentScreen = AppScreen.REPORT
                     },
-                    onDispararCamara = { showDialogOpciones = true },
+                    onDispararCamara = { abrirCamaraConGps() },
                     onIrInicio = { currentScreen = AppScreen.HOME },
                     onIrLotes = { currentScreen = AppScreen.LOTES },
                     onIrAjustes = { currentScreen = AppScreen.SETTINGS },
@@ -335,7 +353,28 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                 )
             }
 
-            // 7. ENCUADRE Y RECORTE DE MUESTRA
+            // 7. CÁMARA INTELIGENTE IN-APP (CameraX + ImageAnalysis en 1 Solo Paso)
+            AppScreen.CAMERA -> {
+                CameraInAppScreen(
+                    loteActivo = currentParcela,
+                    lotesDisponibles = listaLotesCompartida,
+                    onCambiarLote = { nuevoLote ->
+                        currentParcela = nuevoLote
+                    },
+                    onFotoCapturada = { bitmapAutoRecortado ->
+                        enviarFotoAlServidor(bitmapAutoRecortado)
+                    },
+                    onSeleccionarDeGaleria = {
+                        // Cargar foto de galería
+                        galleryLauncher.launch("image/*")
+                    },
+                    onVolver = {
+                        currentScreen = AppScreen.HOME
+                    }
+                )
+            }
+
+            // 8. ENCUADRE Y RECORTE MANUAL (Fallback)
             AppScreen.CROP -> {
                 uncroppedBitmap?.let { rawBitmap ->
                     CropScreen(
@@ -345,7 +384,7 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                         },
                         onRetake = {
                             uncroppedBitmap = null
-                            showDialogOpciones = true
+                            abrirCamaraConGps()
                         },
                         onCancel = {
                             currentScreen = AppScreen.HOME
@@ -357,46 +396,7 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
             }
         }
 
-        // Diálogo para elegir Cámara o Galería
-        if (showDialogOpciones) {
-            AlertDialog(
-                onDismissRequest = { showDialogOpciones = false },
-                title = {
-                    Text("Nueva Evaluación", fontWeight = FontWeight.Bold, color = AgroGreenPrimary)
-                },
-                text = {
-                    Text("Selecciona el método de captura de la fruta:", color = TextDark)
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showDialogOpciones = false
-                            cameraLauncher.launch(null)
-                        }
-                    ) {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = AgroGreenPrimary)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Tomar Foto", color = AgroGreenPrimary, fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            showDialogOpciones = false
-                            galleryLauncher.launch("image/*")
-                        }
-                    ) {
-                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = TextGray)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Galería", color = TextGray)
-                    }
-                },
-                containerColor = AgroCardWhite,
-                shape = RoundedCornerShape(20.dp)
-            )
-        }
-
-        // Modal de Carga con IA
+        // Modal de Carga con IA (Animación de Análisis)
         if (isLoading) {
             Dialog(onDismissRequest = { }) {
                 Surface(
@@ -416,14 +416,14 @@ val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Text(
-                            text = "Analizando con IA...",
+                            text = "Analizando con Gemini AI...",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             color = AgroGreenPrimary
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Evaluando presencia de Botrytis, grado de madurez y fungicidas...",
+                            text = "Inspeccionando Botrytis cinerea, madurez y dosificación fitosanitaria...",
                             fontSize = 12.sp,
                             color = TextGray,
                             lineHeight = 16.sp,

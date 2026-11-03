@@ -1,4 +1,16 @@
-﻿package com.agroscan.app.ui
+package com.agroscan.app.ui
+
+import android.content.Context
+import java.io.File
+import java.io.FileOutputStream
+
+import com.agroscan.app.util.GpsLocationHelper
+import com.agroscan.app.util.GeocodingHelper
+import com.agroscan.app.ui.components.MapaSelectorParcela
+import android.Manifest
+
+import com.agroscan.app.AppScreen
+import com.agroscan.app.ui.AgroScanBottomBar
 
 import android.app.Activity
 import android.net.Uri
@@ -46,22 +58,38 @@ import java.net.URL
 fun SettingsScreen(
     userName: String,
     serverUrl: String,
-    lotes: MutableList<LoteItem>, // ¡LISTA COMPARTIDA REAL!
+    lotes: MutableList<LoteItem>,
     papeleraLotes: MutableList<LoteItem>,
     onGuardarNombre: (nuevoNombre: String) -> Unit,
     onGuardarServerUrl: (nuevaUrl: String) -> Unit,
     onCerrarSesion: () -> Unit,
-    onVolver: () -> Unit // ¡FLECHITA DE REGRESAR!
+    onIrInicio: () -> Unit = {},
+    onIrHistorial: () -> Unit = {},
+    onIrLotes: () -> Unit = {},
+    onDispararCamara: () -> Unit = {},
+    onVolver: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    // Estados reales del Perfil
-    var userPhotoUri by remember { mutableStateOf<Uri?>(null) }
-    var userRole by remember { mutableStateOf("Evaluador Fitosanitario") }
-    var userEmail by remember { mutableStateOf("productor@campoagricola.com") }
+    val settingsLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { }
+
+    // Estados reales del Perfil persistidos
+    val prefs = remember { context.getSharedPreferences("agroscan_prefs", Context.MODE_PRIVATE) }
+    val savedPhotoFile = remember { File(context.filesDir, "perfil_usuario.jpg") }
+    var userPhotoPath by remember {
+        mutableStateOf(if (savedPhotoFile.exists()) savedPhotoFile.absolutePath else prefs.getString("user_photo_path", null))
+    }
+    var userRole by remember {
+        mutableStateOf(prefs.getString("user_role", "Evaluador Fitosanitario") ?: "Evaluador Fitosanitario")
+    }
+    var userEmail by remember {
+        mutableStateOf(prefs.getString("user_email", "evaluador@tecsup.edu.pe") ?: "evaluador@tecsup.edu.pe")
+    }
 
     // Diálogos
     var showDialogEditarPerfil by remember { mutableStateOf(false) }
@@ -81,7 +109,7 @@ fun SettingsScreen(
     // Conexión Real con ESP32-CAM
     var esp32Ip by remember { mutableStateOf("http://192.168.4.1/") }
     var probandoEsp32 by remember { mutableStateOf(false) }
-    var estadoEsp32 by remember { mutableStateOf("No verificada ⚪") }
+    var estadoEsp32 by remember { mutableStateOf("No verificada") }
 
     // CONTROL REAL DE BRILLO SOLAR
     var modoAltoContraste by remember { mutableStateOf(false) }
@@ -110,12 +138,37 @@ fun SettingsScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            userPhotoUri = uri
-            Toast.makeText(context, "Foto de perfil actualizada", Toast.LENGTH_SHORT).show()
+            try {
+                val destFile = File(context.filesDir, "perfil_usuario.jpg")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                userPhotoPath = destFile.absolutePath
+                prefs.edit().putString("user_photo_path", destFile.absolutePath).apply()
+                Toast.makeText(context, "Foto de perfil guardada con éxito", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error al guardar foto: " + (e.localizedMessage ?: "error"), Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     Scaffold(
+        bottomBar = {
+            AgroScanBottomBar(
+                currentScreen = AppScreen.SETTINGS,
+                onNavigate = { destino ->
+                    when (destino) {
+                        AppScreen.HOME -> onIrInicio()
+                        AppScreen.HISTORIAL -> onIrHistorial()
+                        AppScreen.LOTES -> onIrLotes()
+                        else -> {}
+                    }
+                },
+                onDispararCamara = onDispararCamara
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -160,9 +213,10 @@ fun SettingsScreen(
                             .clickable { photoPickerLauncher.launch("image/*") },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (userPhotoUri != null) {
+                        val fotoFile = userPhotoPath?.let { File(it) }
+                        if (fotoFile != null && fotoFile.exists()) {
                             Image(
-                                painter = rememberAsyncImagePainter(userPhotoUri),
+                                painter = rememberAsyncImagePainter(fotoFile),
                                 contentDescription = "Foto real",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -360,7 +414,7 @@ fun SettingsScreen(
                                             }
                                         }
                                         probandoEsp32 = false
-                                        estadoEsp32 = if (respondio) "Conectada 🟢" else "Desconectada 🔴"
+                                        estadoEsp32 = if (respondio) "Conectada (OK)" else "Sin conexión"
                                     }
                                 },
                                 enabled = !probandoEsp32,
@@ -418,7 +472,7 @@ fun SettingsScreen(
                             text = estadoBackend!!,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (estadoBackend!!.contains("🟢")) SemaforoVerde else SemaforoRojo
+                            color = if (estadoBackend!!.contains("(OK)")) SemaforoVerde else SemaforoRojo
                         )
                     }
 
@@ -443,7 +497,7 @@ fun SettingsScreen(
                                 coroutineScope.launch {
                                     val ok = withContext(Dispatchers.IO) { NetworkClient.probarConexion() }
                                     probandoBackend = false
-                                    estadoBackend = if (ok) "Servidor en línea 🟢" else "Sin respuesta 🔴"
+                                    estadoBackend = if (ok) "Servidor en línea (OK)" else "Sin respuesta del servidor"
                                 }
                             },
                             enabled = !probandoBackend,
@@ -640,7 +694,7 @@ fun SettingsScreen(
                                             IconButton(
                                                 onClick = {
                                                     papeleraLotes.removeAt(pIndex)
-                                                    Toast.makeText(context, "Eliminado definitivamente 🗑️", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Lote eliminado definitivamente", Toast.LENGTH_SHORT).show()
                                                 }
                                             ) {
                                                 Icon(Icons.Default.Close, contentDescription = "Eliminar definitivo", tint = SemaforoRojo)
@@ -680,10 +734,19 @@ fun SettingsScreen(
                 },
                 confirmButton = {
                     Button(onClick = {
-                        onGuardarNombre(tempNombre.trim())
-                        userRole = tempRol.trim()
-                        userEmail = tempEmail.trim()
+                        val nom = tempNombre.trim()
+                        val rol = tempRol.trim()
+                        val mail = tempEmail.trim()
+                        onGuardarNombre(nom)
+                        userRole = rol
+                        userEmail = mail
+                        prefs.edit()
+                            .putString("user_name", nom)
+                            .putString("user_role", rol)
+                            .putString("user_email", mail)
+                            .apply()
                         showDialogEditarPerfil = false
+                        Toast.makeText(context, "Perfil guardado con éxito", Toast.LENGTH_SHORT).show()
                     }) { Text("Guardar") }
                 },
                 dismissButton = {
@@ -694,6 +757,10 @@ fun SettingsScreen(
 
         // Diálogo para Añadir Lote (Añade directo a la lista compartida)
         if (showDialogNuevoLote) {
+            var nuevaUbicacionInput by remember { mutableStateOf("Sector General") }
+            var coordsCapturadas by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+            var buscandoGps by remember { mutableStateOf(false) }
+
             AlertDialog(
                 onDismissRequest = { showDialogNuevoLote = false },
                 title = { Text("Registrar Nuevo Lote", fontWeight = FontWeight.Bold, color = AgroGreenPrimary) },
@@ -711,6 +778,80 @@ fun SettingsScreen(
                             label = { Text("Variedad") },
                             placeholder = { Text("Ej. San Andreas") }
                         )
+                        OutlinedTextField(
+                            value = nuevaUbicacionInput,
+                            onValueChange = { nuevaUbicacionInput = it },
+                            label = { Text("Ubicación") },
+                            placeholder = { Text("Ej. Urb. Villa Florencia") }
+                        )
+
+                        // Botón de Ubicación GPS con Dirección Legible
+                        Surface(
+                            onClick = {
+                                if (!GpsLocationHelper.tienePermisoUbicacion(context)) {
+                                    settingsLocationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                } else {
+                                    buscandoGps = true
+                                    GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
+                                        coordsCapturadas = Pair(lat, lon)
+                                        buscandoGps = false
+                                        coroutineScope.launch {
+                                            nuevaUbicacionInput = GeocodingHelper.obtenerDireccionLegible(context, lat, lon)
+                                        }
+                                        Toast.makeText(context, "Ubicación fijada con éxito", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (coordsCapturadas != null) SemaforoVerdeFondo else AgroMintBackground,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (coordsCapturadas != null) SemaforoVerde else AgroCardBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (buscandoGps) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = AgroGreenPrimary)
+                                } else {
+                                    Icon(Icons.Default.LocationOn, contentDescription = "GPS", tint = if (coordsCapturadas != null) SemaforoVerde else AgroGreenPrimary, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = if (coordsCapturadas != null) "Ubicación fijada en el mapa ✓" else "Vincular GPS actual del Lote",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        color = if (coordsCapturadas != null) SemaforoVerde else AgroGreenPrimary
+                                    )
+                                    Text(
+                                        text = if (coordsCapturadas != null) "Radio de precisión 10m" else "Detecta automáticamente la parcela",
+                                        fontSize = 9.sp,
+                                        color = TextGray
+                                    )
+                                }
+                            }
+                        }
+
+                        // Mapa Interactivo Ajustable con el dedo
+                        coordsCapturadas?.let { (lat, lon) ->
+                            MapaSelectorParcela(
+                                latInicial = lat,
+                                lonInicial = lon,
+                                radioMetros = 10,
+                                onCoordenadasCambiadas = { nuevaLat, nuevaLon ->
+                                    coordsCapturadas = Pair(nuevaLat, nuevaLon)
+                                    coroutineScope.launch {
+                                        nuevaUbicacionInput = GeocodingHelper.obtenerDireccionLegible(context, nuevaLat, nuevaLon)
+                                    }
+                                }
+                            )
+                        }
                     }
                 },
                 confirmButton = {
@@ -721,9 +862,11 @@ fun SettingsScreen(
                                     id = lotes.size + 1,
                                     nombre = nuevoLoteInput.trim(),
                                     variedad = if (nuevaVariedadInput.trim().isNotEmpty()) nuevaVariedadInput.trim() else "Albión",
-                                    ubicacion = "Sector General",
+                                    ubicacion = if (nuevaUbicacionInput.trim().isNotEmpty()) nuevaUbicacionInput.trim() else "Sector General",
                                     estado = "Óptimo",
-                                    ultimaEvaluacion = "Recién registrado"
+                                    ultimaEvaluacion = "Recién registrado",
+                                    latitud = coordsCapturadas?.first,
+                                    longitud = coordsCapturadas?.second
                                 )
                             )
                             nuevoLoteInput = ""
@@ -764,3 +907,5 @@ fun SettingsScreen(
         }
     }
 }
+
+

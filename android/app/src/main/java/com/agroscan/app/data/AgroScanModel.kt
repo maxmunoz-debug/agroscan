@@ -1,4 +1,4 @@
-﻿package com.agroscan.app.data
+package com.agroscan.app.data
 
 import android.graphics.Bitmap
 import com.google.gson.annotations.SerializedName
@@ -27,7 +27,7 @@ data class AgroScanResult(
     @SerializedName("recomendacion")
     val recomendacion: String = "",
 
-    // Tratamientos agrícolas (lo que pidió la profesora)
+    // Tratamientos agrícolas recomendados
     val fungicidasSugeridos: List<String> = listOf(
         "Captan 80 WDG (2.0 - 2.5 kg/ha)",
         "Ciprodinil + Fludioxonil (Switch 62.5 WG - 1.0 kg/ha)",
@@ -41,14 +41,17 @@ data class AgroScanResult(
     )
 )
 
-// Modelo compartido de Lote para toda la app
+// Modelo compartido de Lote con Foto personalizada y Georreferenciación GPS
 data class LoteItem(
     val id: Int,
     var nombre: String,
     var variedad: String,
     var ubicacion: String,
     var estado: String = "Óptimo",
-    var ultimaEvaluacion: String = "Hoy"
+    var ultimaEvaluacion: String = "Hoy",
+    var latitud: Double? = null,
+    var longitud: Double? = null,
+    var fotoUri: String? = null // Foto real de la parcela/lote
 )
 
 // Modelo para el Historial de Evaluaciones y Reportes PDF
@@ -59,7 +62,9 @@ data class EvaluacionHistorial(
     val variedad: String,
     val notas: String = "",
     val resultado: AgroScanResult,
-    val bitmap: Bitmap? = null
+    val bitmap: Bitmap? = null,
+    val latitud: Double? = null,
+    val longitud: Double? = null
 )
 
 // Modelo para los mensajes del Chatbot Asistente Agrónomo
@@ -68,4 +73,34 @@ data class MensajeChat(
     val texto: String,
     val esUsuario: Boolean,
     val hora: String
+)
+
+// Modelos de Autenticación con Backend Real SQLite
+data class RegisterRequest(
+    @SerializedName("nombre")
+    val nombre: String,
+    @SerializedName("email")
+    val email: String,
+    @SerializedName("password")
+    val password: String
+)
+
+data class LoginRequest(
+    @SerializedName("email")
+    val email: String,
+    @SerializedName("password")
+    val password: String
+)
+
+data class AuthResponse(
+    @SerializedName("id")
+    val id: Int,
+    @SerializedName("nombre")
+    val nombre: String,
+    @SerializedName("email")
+    val email: String,
+    @SerializedName("rol")
+    val rol: String,
+    @SerializedName("mensaje")
+    val mensaje: String
 )

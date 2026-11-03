@@ -1,5 +1,6 @@
-﻿package com.agroscan.app.ui
+package com.agroscan.app.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -21,6 +23,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agroscan.app.AppScreen
@@ -169,29 +172,54 @@ fun HistorialScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 3. Chips de Filtro Semáforo
+            // 3. Botones de Filtro Simétricos y 100% Responsive
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                listOf("Todos", "Verde", "Amarillo", "Rojo").forEach { filtro ->
-                    val seleccionado = (filtroSemaforo == filtro)
-                    val labelTexto = when (filtro) {
-                        "Verde" -> "Óptimos 🟢"
-                        "Amarillo" -> "Revisión 🟡"
-                        "Rojo" -> "Descarte 🔴"
-                        else -> "Todos"
-                    }
-                    FilterChip(
-                        selected = seleccionado,
-                        onClick = { filtroSemaforo = filtro },
-                        label = { Text(labelTexto, fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AgroGreenPrimary,
-                            selectedLabelColor = Color.White
+                val filtros = listOf(
+                    Triple("Todos", "Todos", AgroGreenPrimary),
+                    Triple("Verde", "Óptimo", SemaforoVerde),
+                    Triple("Amarillo", "Revisión", SemaforoAmarillo),
+                    Triple("Rojo", "Descarte", SemaforoRojo)
+                )
+                filtros.forEach { (filtroId, label, dotColor) ->
+                    val activo = (filtroSemaforo == filtroId)
+                    Surface(
+                        onClick = { filtroSemaforo = filtroId },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (activo) AgroGreenPrimary else AgroCardWhite,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (activo) AgroGreenPrimary else AgroCardBorder
                         ),
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (filtroId != "Todos") {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(if (activo) Color.White else dotColor)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = if (activo) FontWeight.Bold else FontWeight.Medium,
+                                color = if (activo) Color.White else TextDark,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
 
@@ -239,101 +267,155 @@ fun HistorialScreen(
                         }
 
                         Card(
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(20.dp),
                             colors = CardDefaults.cardColors(containerColor = AgroCardWhite),
                             border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onVerReporteDetalle(evaluacion) }
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(14.dp)
                             ) {
-                                // Miniatura de la foto
-                                Box(
-                                    modifier = Modifier
-                                        .size(60.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(AgroMintBackground)
-                                        .border(1.dp, AgroCardBorder, RoundedCornerShape(12.dp)),
-                                    contentAlignment = Alignment.Center
+                                // FILA 1: Nombre de Parcela + Badge de Estado (Semáforo Protegido)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    if (evaluacion.bitmap != null) {
-                                        Image(
-                                            bitmap = evaluacion.bitmap.asImageBitmap(),
-                                            contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Icon(Icons.Default.Eco, contentDescription = null, tint = AgroGreenPrimary)
-                                    }
-                                }
+                                    Text(
+                                        text = evaluacion.loteNombre,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextDark,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
 
-                                Spacer(modifier = Modifier.width(12.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
 
-                                // Información de la Evaluación
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier = Modifier.fillMaxWidth()
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = fondoBadge,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, colorBadge.copy(alpha = 0.35f))
                                     ) {
-                                        Text(
-                                            text = evaluacion.loteNombre,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextDark
-                                        )
-                                        Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = fondoBadge
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .clip(CircleShape)
+                                                    .background(colorBadge)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
                                             Text(
                                                 text = labelBadge,
                                                 color = colorBadge,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // FILA 2: Foto de Muestra + Datos Técnicos + Botón PDF
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Foto de la muestra
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(AgroMintBackground)
+                                            .border(1.dp, AgroCardBorder, RoundedCornerShape(14.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (evaluacion.bitmap != null) {
+                                            Image(
+                                                bitmap = evaluacion.bitmap.asImageBitmap(),
+                                                contentDescription = "Muestra de fresa",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.Eco,
+                                                contentDescription = null,
+                                                tint = AgroGreenPrimary,
+                                                modifier = Modifier.size(26.dp)
                                             )
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "${evaluacion.variedad} • ${evaluacion.fechaHora}",
-                                        fontSize = 11.sp,
-                                        color = TextGray
-                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
 
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Madurez: ${evaluacion.resultado.madurezPorcentaje}% • ${evaluacion.resultado.defectosDetectados}",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (evaluacion.resultado.semaforo.lowercase() == "rojo") SemaforoRojo else TextDark
-                                    )
-                                }
-
-                                // Botón para descargar PDF directo de esta evaluación
-                                IconButton(
-                                    onClick = {
-                                        PdfReportGenerator.generarYDescargarPdf(
-                                            context = context,
-                                            evaluador = userName,
-                                            evaluacion = evaluacion
+                                    // Información de Variedad, Fecha, Madurez y Diagnóstico
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${evaluacion.variedad} • ${evaluacion.fechaHora}",
+                                            fontSize = 11.sp,
+                                            color = TextGray,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Madurez: ",
+                                                fontSize = 12.sp,
+                                                color = TextDark,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "${evaluacion.resultado.madurezPorcentaje}%",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AgroGreenPrimary
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = evaluacion.resultado.defectosDetectados,
+                                            fontSize = 11.sp,
+                                            color = if (evaluacion.resultado.semaforo.lowercase() == "rojo") SemaforoRojo else TextDark,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PictureAsPdf,
-                                        contentDescription = "Descargar PDF",
-                                        tint = AgroGreenPrimary,
-                                        modifier = Modifier.size(22.dp)
-                                    )
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    // Botón Descargar PDF Circular y Elegante
+                                    Surface(
+                                        onClick = {
+                                            PdfReportGenerator.generarYDescargarPdf(
+                                                context = context,
+                                                evaluador = userName,
+                                                evaluacion = evaluacion
+                                            )
+                                                                                    },
+                                        shape = CircleShape,
+                                        color = AgroMintBackground,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, AgroGreenPrimary.copy(alpha = 0.35f)),
+                                        modifier = Modifier.size(38.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                            Icon(
+                                                imageVector = Icons.Default.PictureAsPdf,
+                                                contentDescription = "Descargar PDF",
+                                                tint = AgroGreenPrimary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -343,3 +425,4 @@ fun HistorialScreen(
         }
     }
 }
+
