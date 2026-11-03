@@ -52,10 +52,11 @@ def init_db():
         VALUES ('Investigador Tecsup', 'investigacion@tecsup.edu.pe', ?, 'Evaluador')
         """, (pwd_hash,))
     
-    # Tabla de Lotes Agrícolas
+    # Tabla de Lotes Agrícolas (Con usuario_email)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS lotes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_email TEXT DEFAULT '',
         nombre TEXT NOT NULL,
         variedad TEXT NOT NULL,
         ubicacion TEXT NOT NULL,
@@ -65,19 +66,12 @@ def init_db():
         activo INTEGER DEFAULT 1
     )
     """)
-    
-    # Sembrar lote inicial si la base de datos está vacía
-    cursor.execute("SELECT COUNT(*) FROM lotes WHERE activo = 1")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-        INSERT INTO lotes (nombre, variedad, ubicacion, estado, ultima_eval, salud, activo)
-        VALUES ('Lote 1 (Parcela Norte)', 'Albión', 'Sector General', 'Óptimo', 'Inicial', 100, 1)
-        """)
 
-    # Tabla de Evaluaciones Fitosanitarias Reales
+    # Tabla de Evaluaciones Fitosanitarias Reales (Con usuario_email)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS evaluaciones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_email TEXT DEFAULT '',
         fecha_hora TEXT NOT NULL,
         lote_id INTEGER,
         lote_nombre TEXT NOT NULL,
@@ -144,8 +138,10 @@ class LoteCreate(BaseModel):
     nombre: str
     variedad: str = "Albión"
     ubicacion: str = "Sector General"
+    usuario_email: str = ""
 
 class EvaluacionCreate(BaseModel):
+    usuario_email: str = ""
     lote_id: int | None = None
     lote_nombre: str
     variedad: str = "Albión"
@@ -240,11 +236,14 @@ def login(req: LoginRequest):
 
 # ================= ENDPOINTS DE LOTES (CRUD REAL) =================
 @app.get("/lotes")
-def get_lotes():
+def get_lotes(email: str = ""):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM lotes WHERE activo = 1 ORDER BY id ASC")
+    if email.strip():
+        cursor.execute("SELECT * FROM lotes WHERE activo = 1 AND (usuario_email = ? OR usuario_email = '' OR usuario_email IS NULL) ORDER BY id ASC", (email.strip().lower(),))
+    else:
+        cursor.execute("SELECT * FROM lotes WHERE activo = 1 ORDER BY id ASC")
     rows = cursor.fetchall()
     conn.close()
     return [
@@ -255,7 +254,8 @@ def get_lotes():
             "ubicacion": r["ubicacion"],
             "estado": r["estado"],
             "ultimaEval": r["ultima_eval"],
-            "salud": r["salud"]
+            "salud": r["salud"],
+            "usuarioEmail": r["usuario_email"]
         } for r in rows
     ]
 
@@ -264,9 +264,9 @@ def create_lote(lote: LoteCreate):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO lotes (nombre, variedad, ubicacion, estado, ultima_eval, salud, activo)
-    VALUES (?, ?, ?, 'Óptimo', 'Recién registrado', 100, 1)
-    """, (lote.nombre.strip(), lote.variedad.strip(), lote.ubicacion.strip()))
+    INSERT INTO lotes (usuario_email, nombre, variedad, ubicacion, estado, ultima_eval, salud, activo)
+    VALUES (?, ?, ?, ?, 'Óptimo', 'Recién registrado', 100, 1)
+    """, (lote.usuario_email.strip().lower(), lote.nombre.strip(), lote.variedad.strip(), lote.ubicacion.strip()))
     conn.commit()
     nuevo_id = cursor.lastrowid
     conn.close()
@@ -283,17 +283,21 @@ def delete_lote(lote_id: int):
 
 # ================= ENDPOINTS DE EVALUACIONES FITOSANITARIAS =================
 @app.get("/evaluaciones")
-def get_evaluaciones():
+def get_evaluaciones(email: str = ""):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM evaluaciones ORDER BY id DESC")
+    if email.strip():
+        cursor.execute("SELECT * FROM evaluaciones WHERE (usuario_email = ? OR usuario_email = '' OR usuario_email IS NULL) ORDER BY id DESC", (email.strip().lower(),))
+    else:
+        cursor.execute("SELECT * FROM evaluaciones ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
     res = []
     for r in rows:
         res.append({
             "id": r["id"],
+            "usuarioEmail": r["usuario_email"],
             "fechaHora": r["fecha_hora"],
             "loteId": r["lote_id"],
             "loteNombre": r["lote_nombre"],
@@ -319,12 +323,12 @@ def create_evaluacion(evaluacion: EvaluacionCreate):
     
     cursor.execute("""
     INSERT INTO evaluaciones (
-        fecha_hora, lote_id, lote_nombre, variedad, fruta,
+        usuario_email, fecha_hora, lote_id, lote_nombre, variedad, fruta,
         madurez_porcentaje, color_predominante, defectos_detectados,
         semaforo, dictamen, recomendacion, fungicidas_json, medidas_json, notas
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        ahora, evaluacion.lote_id, evaluacion.lote_nombre, evaluacion.variedad, evaluacion.fruta,
+        evaluacion.usuario_email.strip().lower(), ahora, evaluacion.lote_id, evaluacion.lote_nombre, evaluacion.variedad, evaluacion.fruta,
         evaluacion.madurez_porcentaje, evaluacion.color_predominante, evaluacion.defectos_detectados,
         evaluacion.semaforo.lower(), evaluacion.dictamen, evaluacion.recomendacion,
         json.dumps(evaluacion.fungicidas_sugeridos), json.dumps(evaluacion.medidas_preventivas), evaluacion.notas
