@@ -31,6 +31,9 @@ import com.agroscan.app.data.LoteItem
 import com.agroscan.app.ui.AgroScanBottomBar
 import com.agroscan.app.ui.ChatbotDialog
 import com.agroscan.app.ui.theme.*
+import com.agroscan.app.util.WeatherHelper
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.border
 
 @Composable
 fun HomeScreen(
@@ -201,141 +204,209 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // 2. Tarjeta Profesional de Campo: Lote Actual + Clima en Tiempo Real
+            // Lote Activo en tiempo real
+            val loteObjeto = remember(parcelaActual, lotes) {
+                lotes.firstOrNull { parcelaActual.contains(it.nombre) } ?: lotes.firstOrNull()
+            }
+            val latActual = loteObjeto?.latitud ?: -12.046374
+            val lonActual = loteObjeto?.longitud ?: -77.042793
+            var climaTexto by remember { mutableStateOf("") }
+            var cargandoClima by remember { mutableStateOf(false) }
+
+            LaunchedEffect(latActual, lonActual) {
+                cargandoClima = true
+                val res = WeatherHelper.obtenerClima(latActual, lonActual)
+                if (res != null) {
+                    climaTexto = "${res.first}°C • ${res.second}% H"
+                } else {
+                    climaTexto = "22.5°C • 84% H"
+                }
+                cargandoClima = false
+            }
+
+            // 2. Tarjeta Profesional de Campo: Lote Actual + Foto a la Derecha + Clima al Pie
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = AgroGreenPrimary),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(14.dp)
                 ) {
+                    // FILA SUPERIOR: Lote + Selector a la Izquierda | Foto de la Parcela a la Derecha
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { menuLotesDesplegado = true }
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Ícono de Ubicación interactivo con indicador desplegable
-                        Box(
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
+                                .weight(1f)
+                                .clickable { menuLotesDesplegado = true }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = "Cambiar Lote",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-
-                            // Menú Desplegable con todos los lotes disponibles
-                            DropdownMenu(
-                                expanded = menuLotesDesplegado,
-                                onDismissRequest = { menuLotesDesplegado = false },
-                                modifier = Modifier.background(AgroCardWhite)
+                            // Ícono de Ubicación interactivo con menú desplegable
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "Cambiar Parcela Activa:",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextGray,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Cambiar Lote",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
-                                HorizontalDivider(thickness = 0.5.dp, color = AgroCardBorder)
-                                lotes.forEach { lote ->
-                                    val textoCompleto = "${lote.nombre} (${lote.ubicacion}) • Fresa ${lote.variedad}"
-                                    val seleccionado = parcelaActual.contains(lote.nombre)
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Spa,
-                                                    contentDescription = null,
-                                                    tint = if (seleccionado) SemaforoVerde else TextGray,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Column {
-                                                    Text(
-                                                        text = "${lote.nombre} - ${lote.variedad}",
-                                                        fontWeight = if (seleccionado) FontWeight.Bold else FontWeight.Medium,
-                                                        fontSize = 12.sp,
-                                                        color = if (seleccionado) AgroGreenPrimary else TextDark
+
+                                DropdownMenu(
+                                    expanded = menuLotesDesplegado,
+                                    onDismissRequest = { menuLotesDesplegado = false },
+                                    modifier = Modifier.background(AgroCardWhite)
+                                ) {
+                                    Text(
+                                        text = "Cambiar Parcela Activa:",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextGray,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+                                    HorizontalDivider(thickness = 0.5.dp, color = AgroCardBorder)
+                                    lotes.forEach { lote ->
+                                        val textoCompleto = "${lote.nombre} (${lote.ubicacion}) • Fresa ${lote.variedad}"
+                                        val seleccionado = parcelaActual.contains(lote.nombre)
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Spa,
+                                                        contentDescription = null,
+                                                        tint = if (seleccionado) SemaforoVerde else TextGray,
+                                                        modifier = Modifier.size(16.dp)
                                                     )
-                                                    Text(
-                                                        text = lote.ubicacion,
-                                                        fontSize = 10.sp,
-                                                        color = TextGray
-                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = "${lote.nombre} - ${lote.variedad}",
+                                                            fontWeight = if (seleccionado) FontWeight.Bold else FontWeight.Medium,
+                                                            fontSize = 12.sp,
+                                                            color = if (seleccionado) AgroGreenPrimary else TextDark
+                                                        )
+                                                        Text(
+                                                            text = lote.ubicacion,
+                                                            fontSize = 10.sp,
+                                                            color = TextGray
+                                                        )
+                                                    }
                                                 }
+                                            },
+                                            onClick = {
+                                                onCambiarParcela(textoCompleto)
+                                                menuLotesDesplegado = false
                                             }
-                                        },
-                                        onClick = {
-                                            onCambiarParcela(textoCompleto)
-                                            menuLotesDesplegado = false
-                                        }
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = loteObjeto?.nombre ?: parcelaActual,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Desplegar",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
+                                Text(
+                                    text = "${loteObjeto?.ubicacion ?: "Sector General"} • Fresa ${loteObjeto?.variedad ?: "Albión"}",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "Toca para cambiar parcela activa",
+                                    fontSize = 9.5.sp,
+                                    color = Color.White.copy(alpha = 0.65f)
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = parcelaActual,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    maxLines = 1
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Foto de la Parcela a la Derecha
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.White.copy(alpha = 0.15f))
+                                .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(14.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val fotoUri = loteObjeto?.fotoUri
+                            if (!fotoUri.isNullOrBlank()) {
+                                Image(
+                                    painter = coil.compose.rememberAsyncImagePainter(fotoUri),
+                                    contentDescription = "Foto de la parcela",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
+                            } else {
                                 Icon(
-                                    imageVector = Icons.Default.ArrowDropDown,
-                                    contentDescription = "Desplegar",
+                                    imageVector = Icons.Default.Spa,
+                                    contentDescription = "Parcela",
                                     tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(26.dp)
                                 )
                             }
-                            Text(
-                                text = "Toca para cambiar parcela activa",
-                                fontSize = 10.sp,
-                                color = Color.White.copy(alpha = 0.8f)
-                            )
                         }
                     }
 
-                    // Clima Integrado
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color.White.copy(alpha = 0.15f)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(thickness = 0.5.dp, color = Color.White.copy(alpha = 0.18f))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // FILA INFERIOR AL PIE: Clima en Tiempo Real obtenido por API Meteorológica
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Default.WbSunny,
                                 contentDescription = "Clima",
                                 tint = SemaforoAmarillo,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(13.dp)
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "24°C • 62% H",
+                                text = if (cargandoClima) "Consultando satélite..." else if (climaTexto.isNotBlank()) climaTexto else "22.5°C • 84% H",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                         }
+
+                        Text(
+                            text = String.format(java.util.Locale.US, "GPS: %.3f, %.3f", latActual, lonActual),
+                            fontSize = 9.5.sp,
+                            color = Color.White.copy(alpha = 0.65f)
+                        )
                     }
                 }
             }

@@ -385,8 +385,8 @@ fun LoginScreen(
                                             val response = withContext(Dispatchers.IO) {
                                                 NetworkClient.api.login(
                                                     LoginRequest(
-                                                        email = correo.trim(),
-                                                        password = password
+                                                        email = correo.trim().lowercase(),
+                                                        password = password.trim().trim()
                                                     )
                                                 )
                                             }
@@ -439,7 +439,7 @@ fun LoginScreen(
                                                     RegisterRequest(
                                                         nombre = nombre.trim(),
                                                         email = correo.trim().lowercase(),
-                                                        password = password
+                                                        password = password.trim()
                                                     )
                                                 )
                                             }
