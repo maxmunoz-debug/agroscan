@@ -88,6 +88,13 @@ def init_db():
         notas TEXT DEFAULT ''
     )
     """)
+
+    # Índices B-Tree de Alto Rendimiento para Consultas Instantáneas (>1000 registros)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_usuario ON evaluaciones(usuario_email);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_fecha ON evaluaciones(id DESC);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_lote ON evaluaciones(lote_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotes_usuario ON lotes(usuario_email);")
+
     conn.commit()
     conn.close()
 
@@ -283,14 +290,14 @@ def delete_lote(lote_id: int):
 
 # ================= ENDPOINTS DE EVALUACIONES FITOSANITARIAS =================
 @app.get("/evaluaciones")
-def get_evaluaciones(email: str = ""):
+def get_evaluaciones(email: str = "", limit: int = 100, offset: int = 0):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     if email.strip():
-        cursor.execute("SELECT * FROM evaluaciones WHERE (usuario_email = ? OR usuario_email = '' OR usuario_email IS NULL) ORDER BY id DESC", (email.strip().lower(),))
+        cursor.execute("SELECT * FROM evaluaciones WHERE (usuario_email = ? OR usuario_email = '' OR usuario_email IS NULL) ORDER BY id DESC LIMIT ? OFFSET ?", (email.strip().lower(), limit, offset))
     else:
-        cursor.execute("SELECT * FROM evaluaciones ORDER BY id DESC")
+        cursor.execute("SELECT * FROM evaluaciones ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
     rows = cursor.fetchall()
     conn.close()
     res = []
@@ -314,6 +321,45 @@ def get_evaluaciones(email: str = ""):
             "notas": r["notas"]
         })
     return res
+
+@app.get("/evaluaciones/resumen")
+def get_evaluaciones_resumen(email: str = ""):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    em = email.strip().lower()
+    if em:
+        cursor.execute("""
+        SELECT lote_nombre, COUNT(*) as total,
+               SUM(CASE WHEN LOWER(semaforo) = 'verde' THEN 1 ELSE 0 END) as optimos,
+               SUM(CASE WHEN LOWER(semaforo) = 'amarillo' THEN 1 ELSE 0 END) as revision,
+               SUM(CASE WHEN LOWER(semaforo) = 'rojo' THEN 1 ELSE 0 END) as criticos
+        FROM evaluaciones
+        WHERE (usuario_email = ? OR usuario_email = '' OR usuario_email IS NULL)
+        GROUP BY lote_nombre
+        ORDER BY total DESC
+        """, (em,))
+    else:
+        cursor.execute("""
+        SELECT lote_nombre, COUNT(*) as total,
+               SUM(CASE WHEN LOWER(semaforo) = 'verde' THEN 1 ELSE 0 END) as optimos,
+               SUM(CASE WHEN LOWER(semaforo) = 'amarillo' THEN 1 ELSE 0 END) as revision,
+               SUM(CASE WHEN LOWER(semaforo) = 'rojo' THEN 1 ELSE 0 END) as criticos
+        FROM evaluaciones
+        GROUP BY lote_nombre
+        ORDER BY total DESC
+        """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "loteNombre": r["lote_nombre"],
+            "total": r["total"],
+            "optimos": r["optimos"],
+            "revision": r["revision"],
+            "criticos": r["criticos"]
+        } for r in rows
+    ]
 
 @app.post("/evaluaciones")
 def create_evaluacion(evaluacion: EvaluacionCreate):
