@@ -67,7 +67,8 @@ fun SettingsScreen(
     onIrHistorial: () -> Unit = {},
     onIrLotes: () -> Unit = {},
     onDispararCamara: () -> Unit = {},
-    onVolver: () -> Unit = {}
+    onVolver: () -> Unit = {},
+    mostrarBottomBar: Boolean = true
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -156,7 +157,8 @@ fun SettingsScreen(
 
     Scaffold(
         bottomBar = {
-            AgroScanBottomBar(
+            if (mostrarBottomBar) {
+                AgroScanBottomBar(
                 currentScreen = AppScreen.SETTINGS,
                 onNavigate = { destino ->
                     when (destino) {
@@ -167,7 +169,8 @@ fun SettingsScreen(
                     }
                 },
                 onDispararCamara = onDispararCamara
-            )
+                )
+            }
         },
         topBar = {
             TopAppBar(

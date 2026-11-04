@@ -45,7 +45,8 @@ fun HomeScreen(
     onCambiarParcela: (String) -> Unit = {},
     onIrHistorial: () -> Unit = {},
     onIrLotes: () -> Unit,
-    onIrAjustes: () -> Unit
+    onIrAjustes: () -> Unit,
+    mostrarBottomBar: Boolean = true
 ) {
     val scrollState = rememberScrollState()
     var showChatbot by remember { mutableStateOf(false) }
@@ -98,7 +99,8 @@ fun HomeScreen(
     Scaffold(
         containerColor = AgroMintBackground,
         bottomBar = {
-            AgroScanBottomBar(
+            if (mostrarBottomBar) {
+                AgroScanBottomBar(
                 currentScreen = AppScreen.HOME,
                 onNavigate = { destino ->
                     when (destino) {
@@ -109,7 +111,8 @@ fun HomeScreen(
                     }
                 },
                 onDispararCamara = onIniciarEvaluacion
-            )
+                )
+            }
         }
     ) { innerPadding ->
         Column(

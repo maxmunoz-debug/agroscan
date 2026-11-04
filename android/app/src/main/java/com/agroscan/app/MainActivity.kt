@@ -16,6 +16,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -168,12 +170,36 @@ fun AgroScanApp() {
         }
     }
 
+    // Navegación principal con Pager Deslizable (Swipe Horizontal)
+    val paginasPrincipales = listOf(AppScreen.HOME, AppScreen.HISTORIAL, AppScreen.LOTES, AppScreen.SETTINGS)
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
+
     var currentScreen by remember {
         mutableStateOf(if (userName.isNotEmpty() && userEmail.isNotEmpty()) AppScreen.HOME else AppScreen.LOGIN)
     }
 
-    BackHandler(enabled = (currentScreen != AppScreen.HOME && currentScreen != AppScreen.LOGIN)) {
-        currentScreen = AppScreen.HOME
+    // Sincronizar el currentScreen cuando el usuario desliza la pantalla con su dedo
+    LaunchedEffect(pagerState.currentPage) {
+        val nuevaPantalla = paginasPrincipales[pagerState.currentPage]
+        if (currentScreen in paginasPrincipales && currentScreen != nuevaPantalla) {
+            currentScreen = nuevaPantalla
+        }
+    }
+
+    // Sincronizar el pagerState si el currentScreen cambia por código
+    LaunchedEffect(currentScreen) {
+        val targetIndex = paginasPrincipales.indexOf(currentScreen)
+        if (targetIndex != -1 && pagerState.currentPage != targetIndex) {
+            pagerState.scrollToPage(targetIndex)
+        }
+    }
+
+    BackHandler(enabled = (currentScreen != AppScreen.LOGIN)) {
+        if (currentScreen !in paginasPrincipales) {
+            currentScreen = AppScreen.HOME
+        } else if (pagerState.currentPage != 0) {
+            coroutineScope.launch { pagerState.animateScrollToPage(0) }
+        }
     }
 
     var isLoading by remember { mutableStateOf(false) }
@@ -254,49 +280,13 @@ fun AgroScanApp() {
                             .putString("user_role", rolIngresado)
                             .apply()
                         cargarDatosDeUsuario(emailIngresado)
+                        coroutineScope.launch { pagerState.scrollToPage(0) }
                         currentScreen = AppScreen.HOME
                     }
                 )
             }
 
-            // 2. DASHBOARD DE INICIO
-            AppScreen.HOME -> {
-                HomeScreen(
-                    userName = userName,
-                    parcelaActual = currentParcela,
-                    historial = listaHistorialCompartida,
-                    lotes = listaLotesCompartida,
-                    onIniciarEvaluacion = { abrirCamaraConGps() },
-                    onCambiarParcela = { nuevaParcela -> currentParcela = nuevaParcela },
-                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
-                    onIrLotes = { currentScreen = AppScreen.LOTES },
-                    onIrAjustes = { currentScreen = AppScreen.SETTINGS }
-                )
-            }
-
-            // 3. GESTIÓN DE LOTES
-            AppScreen.LOTES -> {
-                LotesScreen(
-                    lotes = listaLotesCompartida,
-                    papeleraLotes = papeleraLotesCompartida,
-                    loteActivoActual = currentParcela,
-                    onSeleccionarLoteActivo = { loteSeleccionado ->
-                        currentParcela = loteSeleccionado
-                        currentScreen = AppScreen.HOME
-                    },
-                    onIniciarEvaluacionEnLote = { loteNombre ->
-                        currentParcela = "$loteNombre • Fresa Albión"
-                        abrirCamaraConGps()
-                    },
-                    onIrInicio = { currentScreen = AppScreen.HOME },
-                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
-                    onIrAjustes = { currentScreen = AppScreen.SETTINGS },
-                    onDispararCamara = { abrirCamaraConGps() },
-                    onVolver = { currentScreen = AppScreen.HOME }
-                )
-            }
-
-            // 4. REPORTE FITOSANITARIO
+            // 2. REPORTE FITOSANITARIO
             AppScreen.REPORT -> {
                 scanResult?.let { result ->
                     ReportScreen(
@@ -394,7 +384,6 @@ fun AgroScanApp() {
                             currentScreen = AppScreen.HOME
                         },
                         onVolver = {
-                            // Auto-guardado de seguridad para que ningún escaneo se pierda aunque el usuario presione volver
                             val yaGuardado = listaHistorialCompartida.any {
                                 it.resultado.dictamen == result.dictamen && it.resultado.madurezPorcentaje == result.madurezPorcentaje
                             }
@@ -426,65 +415,7 @@ fun AgroScanApp() {
                 }
             }
 
-            // 5. AJUSTES DEL SISTEMA
-            AppScreen.SETTINGS -> {
-                SettingsScreen(
-                    userName = userName,
-                    serverUrl = NetworkClient.currentBaseUrl,
-                    lotes = listaLotesCompartida,
-                    papeleraLotes = papeleraLotesCompartida,
-                    onGuardarNombre = { nuevo ->
-                        userName = nuevo
-                        prefs.edit().putString("user_name", nuevo).apply()
-                    },
-                    onGuardarServerUrl = { nuevaUrl ->
-                        NetworkClient.setBaseUrl(nuevaUrl)
-                        prefs.edit().putString("server_url", nuevaUrl).apply()
-                    },
-                    onCerrarSesion = {
-                        prefs.edit()
-                            .remove("user_name")
-                            .remove("user_email")
-                            .remove("user_role")
-                            .apply()
-                        userName = ""
-                        userEmail = ""
-                        listaLotesCompartida.clear()
-                        listaHistorialCompartida.clear()
-                        currentScreen = AppScreen.LOGIN
-                    },
-                    onIrInicio = { currentScreen = AppScreen.HOME },
-                    onIrHistorial = { currentScreen = AppScreen.HISTORIAL },
-                    onIrLotes = { currentScreen = AppScreen.LOTES },
-                    onDispararCamara = { abrirCamaraConGps() },
-                    onVolver = { currentScreen = AppScreen.HOME }
-                )
-            }
-
-            // 6. HISTORIAL DE INSPECCIONES
-            AppScreen.HISTORIAL -> {
-                HistorialScreen(
-                    historial = listaHistorialCompartida,
-                    userName = userName,
-                    onVerReporteDetalle = { evaluacionSeleccionada ->
-                        scanResult = evaluacionSeleccionada.resultado
-                        selectedBitmap = evaluacionSeleccionada.bitmap ?: if (!evaluacionSeleccionada.fotoPath.isNullOrBlank()) {
-                            try {
-                                val f = File(evaluacionSeleccionada.fotoPath)
-                                if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
-                            } catch (_: Exception) { null }
-                        } else null
-                        currentScreen = AppScreen.REPORT
-                    },
-                    onDispararCamara = { abrirCamaraConGps() },
-                    onIrInicio = { currentScreen = AppScreen.HOME },
-                    onIrLotes = { currentScreen = AppScreen.LOTES },
-                    onIrAjustes = { currentScreen = AppScreen.SETTINGS },
-                    onVolver = { currentScreen = AppScreen.HOME }
-                )
-            }
-
-            // 7. CÁMARA INTELIGENTE
+            // 3. CÁMARA INTELIGENTE
             AppScreen.CAMERA -> {
                 CameraInAppScreen(
                     loteActivo = currentParcela,
@@ -504,7 +435,7 @@ fun AgroScanApp() {
                 )
             }
 
-            // 8. RECORTE DE IMAGEN
+            // 4. RECORTE DE IMAGEN
             AppScreen.CROP -> {
                 uncroppedBitmap?.let { bmp ->
                     CropScreen(
@@ -519,6 +450,122 @@ fun AgroScanApp() {
                             currentScreen = AppScreen.CAMERA
                         }
                     )
+                }
+            }
+
+            // 5. NAVEGACIÓN PRINCIPAL CON DESLIZAMIENTO HORIZONTAL (SWIPE GESTURES)
+            else -> {
+                Scaffold(
+                    bottomBar = {
+                        AgroScanBottomBar(
+                            currentScreen = paginasPrincipales[pagerState.currentPage],
+                            onNavigate = { destino ->
+                                val targetIndex = paginasPrincipales.indexOf(destino)
+                                if (targetIndex != -1) {
+                                    coroutineScope.launch {
+                                        pagerState.animateScrollToPage(targetIndex)
+                                    }
+                                }
+                            },
+                            onDispararCamara = { abrirCamaraConGps() }
+                        )
+                    }
+                ) { scaffoldPadding ->
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = scaffoldPadding.calculateBottomPadding())
+                    ) { page ->
+                        when (page) {
+                            0 -> HomeScreen(
+                                userName = userName,
+                                parcelaActual = currentParcela,
+                                historial = listaHistorialCompartida,
+                                lotes = listaLotesCompartida,
+                                onIniciarEvaluacion = { abrirCamaraConGps() },
+                                onCambiarParcela = { nuevaParcela -> currentParcela = nuevaParcela },
+                                onIrHistorial = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
+                                onIrLotes = { coroutineScope.launch { pagerState.animateScrollToPage(2) } },
+                                onIrAjustes = { coroutineScope.launch { pagerState.animateScrollToPage(3) } },
+                                mostrarBottomBar = false
+                            )
+
+                            1 -> HistorialScreen(
+                                historial = listaHistorialCompartida,
+                                userName = userName,
+                                onVerReporteDetalle = { evaluacionSeleccionada ->
+                                    scanResult = evaluacionSeleccionada.resultado
+                                    selectedBitmap = evaluacionSeleccionada.bitmap ?: if (!evaluacionSeleccionada.fotoPath.isNullOrBlank()) {
+                                        try {
+                                            val f = File(evaluacionSeleccionada.fotoPath)
+                                            if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+                                        } catch (_: Exception) { null }
+                                    } else null
+                                    currentScreen = AppScreen.REPORT
+                                },
+                                onDispararCamara = { abrirCamaraConGps() },
+                                onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                onIrLotes = { coroutineScope.launch { pagerState.animateScrollToPage(2) } },
+                                onIrAjustes = { coroutineScope.launch { pagerState.animateScrollToPage(3) } },
+                                onVolver = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                mostrarBottomBar = false
+                            )
+
+                            2 -> LotesScreen(
+                                lotes = listaLotesCompartida,
+                                papeleraLotes = papeleraLotesCompartida,
+                                loteActivoActual = currentParcela,
+                                onSeleccionarLoteActivo = { loteSeleccionado ->
+                                    currentParcela = loteSeleccionado
+                                    coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                                },
+                                onIniciarEvaluacionEnLote = { loteNombre ->
+                                    currentParcela = "$loteNombre • Fresa Albión"
+                                    abrirCamaraConGps()
+                                },
+                                onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                onIrHistorial = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
+                                onIrAjustes = { coroutineScope.launch { pagerState.animateScrollToPage(3) } },
+                                onDispararCamara = { abrirCamaraConGps() },
+                                onVolver = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                mostrarBottomBar = false
+                            )
+
+                            3 -> SettingsScreen(
+                                userName = userName,
+                                serverUrl = NetworkClient.currentBaseUrl,
+                                lotes = listaLotesCompartida,
+                                papeleraLotes = papeleraLotesCompartida,
+                                onGuardarNombre = { nuevo ->
+                                    userName = nuevo
+                                    prefs.edit().putString("user_name", nuevo).apply()
+                                },
+                                onGuardarServerUrl = { nuevaUrl ->
+                                    NetworkClient.setBaseUrl(nuevaUrl)
+                                    prefs.edit().putString("server_url", nuevaUrl).apply()
+                                },
+                                onCerrarSesion = {
+                                    prefs.edit()
+                                        .remove("user_name")
+                                        .remove("user_email")
+                                        .remove("user_role")
+                                        .apply()
+                                    userName = ""
+                                    userEmail = ""
+                                    listaLotesCompartida.clear()
+                                    listaHistorialCompartida.clear()
+                                    currentScreen = AppScreen.LOGIN
+                                },
+                                onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                onIrHistorial = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
+                                onIrLotes = { coroutineScope.launch { pagerState.animateScrollToPage(2) } },
+                                onDispararCamara = { abrirCamaraConGps() },
+                                onVolver = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                                mostrarBottomBar = false
+                            )
+                        }
+                    }
                 }
             }
         }

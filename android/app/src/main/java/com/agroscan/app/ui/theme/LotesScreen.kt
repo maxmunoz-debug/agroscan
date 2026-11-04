@@ -49,7 +49,8 @@ fun LotesScreen(
     onIrHistorial: () -> Unit = {},
     onIrAjustes: () -> Unit = {},
     onDispararCamara: () -> Unit = {},
-    onVolver: () -> Unit = {}
+    onVolver: () -> Unit = {},
+    mostrarBottomBar: Boolean = true
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -86,7 +87,8 @@ fun LotesScreen(
 
     Scaffold(
         bottomBar = {
-            AgroScanBottomBar(
+            if (mostrarBottomBar) {
+                AgroScanBottomBar(
                 currentScreen = AppScreen.LOTES,
                 onNavigate = { destino ->
                     when (destino) {
@@ -97,7 +99,8 @@ fun LotesScreen(
                     }
                 },
                 onDispararCamara = onDispararCamara
-            )
+                )
+            }
         },
         topBar = {
             TopAppBar(

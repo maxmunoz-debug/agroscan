@@ -48,7 +48,8 @@ fun HistorialScreen(
     onIrInicio: () -> Unit,
     onIrLotes: () -> Unit,
     onIrAjustes: () -> Unit,
-    onVolver: () -> Unit
+    onVolver: () -> Unit,
+    mostrarBottomBar: Boolean = true
 ) {
     val context = LocalContext.current
     var modoHistorial by remember { mutableStateOf(HistorialModo.RECIENTES) }
@@ -117,7 +118,8 @@ fun HistorialScreen(
             )
         },
         bottomBar = {
-            AgroScanBottomBar(
+            if (mostrarBottomBar) {
+                AgroScanBottomBar(
                 currentScreen = AppScreen.HISTORIAL,
                 onNavigate = { destino ->
                     when (destino) {
@@ -128,7 +130,8 @@ fun HistorialScreen(
                     }
                 },
                 onDispararCamara = onDispararCamara
-            )
+                )
+            }
         },
         containerColor = AgroMintBackground
     ) { padding ->
