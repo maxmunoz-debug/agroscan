@@ -167,7 +167,7 @@ class ChatResponse(BaseModel):
 def register(req: RegisterRequest):
     nombre = req.nombre.strip()
     email = req.email.strip().lower()
-    password = req.password
+    password = req.password.strip()
 
     if len(nombre) < 2:
         raise HTTPException(status_code=400, detail="El nombre debe tener al menos 2 caracteres")
@@ -204,7 +204,7 @@ def register(req: RegisterRequest):
 @app.post("/auth/login", response_model=AuthResponse)
 def login(req: LoginRequest):
     identificador = req.email.strip().lower()
-    password = req.password
+    password = req.password.strip()
 
     if not identificador or not password:
         raise HTTPException(status_code=400, detail="Debe ingresar correo/usuario y contraseña")
