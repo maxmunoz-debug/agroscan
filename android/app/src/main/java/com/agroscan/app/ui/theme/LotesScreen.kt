@@ -36,6 +36,8 @@ import com.agroscan.app.ui.theme.*
 import com.agroscan.app.util.GeocodingHelper
 import com.agroscan.app.util.GpsLocationHelper
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +47,7 @@ fun LotesScreen(
     loteActivoActual: String,
     onSeleccionarLoteActivo: (nombreCompletoLote: String) -> Unit,
     onIniciarEvaluacionEnLote: (nombreLote: String) -> Unit,
+    onLotesCambiados: () -> Unit = {},
     onIrInicio: () -> Unit = {},
     onIrHistorial: () -> Unit = {},
     onIrAjustes: () -> Unit = {},
@@ -56,18 +59,61 @@ fun LotesScreen(
     val coroutineScope = rememberCoroutineScope()
     var busqueda by remember { mutableStateOf("") }
 
-    val globalLocationPermissionLauncher = rememberLauncherForActivityResult(
+    // Gestor de permisos de ubicación con acción pendiente
+    var pendingLocationAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
+    ) { permissions ->
+        val concedido = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                        permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (concedido) {
+            pendingLocationAction?.invoke()
+        } else {
+            Toast.makeText(context, "Se requiere permiso de ubicación para posicionar la parcela", Toast.LENGTH_SHORT).show()
+        }
+        pendingLocationAction = null
+    }
 
-    var loteFotoSeleccionadaIndex by remember { mutableStateOf<Int?>(null) }
+    fun ejecutarConPermisoUbicacion(accion: () -> Unit) {
+        if (GpsLocationHelper.tienePermisoUbicacion(context)) {
+            accion()
+        } else {
+            pendingLocationAction = accion
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    // Selector de foto de parcela con persistencia real e inmediata en disco interno
+    var loteFotoSeleccionadaId by remember { mutableStateOf<Int?>(null) }
     val loteFotoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        if (uri != null && loteFotoSeleccionadaIndex != null && loteFotoSeleccionadaIndex!! in lotes.indices) {
-            val actual = lotes[loteFotoSeleccionadaIndex!!]
-            lotes[loteFotoSeleccionadaIndex!!] = actual.copy(fotoUri = uri.toString())
-            Toast.makeText(context, "Foto del lote actualizada", Toast.LENGTH_SHORT).show()
+        val idActual = loteFotoSeleccionadaId
+        if (uri != null && idActual != null) {
+            val idx = lotes.indexOfFirst { it.id == idActual }
+            if (idx != -1) {
+                val actual = lotes[idx]
+                try {
+                    val dir = File(context.filesDir, "lotes_fotos")
+                    if (!dir.exists()) dir.mkdirs()
+                    val destFile = File(dir, "lote_${actual.id}_${System.currentTimeMillis()}.jpg")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(destFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    lotes[idx] = actual.copy(fotoUri = destFile.absolutePath)
+                    onLotesCambiados()
+                    Toast.makeText(context, "Foto de ${actual.nombre} guardada con éxito ✓", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Error al guardar foto: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -75,9 +121,11 @@ fun LotesScreen(
     var showDialogEditarLote by remember { mutableStateOf(false) }
     var showDialogAjustarMapa by remember { mutableStateOf(false) }
     var showDialogPapelera by remember { mutableStateOf(false) }
-    var loteAEditarIndex by remember { mutableStateOf<Int?>(null) }
-    var loteAjustandoIndex by remember { mutableStateOf<Int?>(null) }
-    var loteAEliminarIndex by remember { mutableStateOf<Int?>(null) }
+    var showDialogFotoOpciones by remember { mutableStateOf(false) }
+    var loteFotoOpcionesId by remember { mutableStateOf<Int?>(null) }
+    var loteAEditarId by remember { mutableStateOf<Int?>(null) }
+    var loteAjustandoId by remember { mutableStateOf<Int?>(null) }
+    var loteAEliminarId by remember { mutableStateOf<Int?>(null) }
 
     val lotesFiltrados = lotes.filter {
         it.nombre.contains(busqueda, ignoreCase = true) ||
@@ -89,16 +137,16 @@ fun LotesScreen(
         bottomBar = {
             if (mostrarBottomBar) {
                 AgroScanBottomBar(
-                currentScreen = AppScreen.LOTES,
-                onNavigate = { destino ->
-                    when (destino) {
-                        AppScreen.HOME -> onIrInicio()
-                        AppScreen.HISTORIAL -> onIrHistorial()
-                        AppScreen.SETTINGS -> onIrAjustes()
-                        else -> {}
-                    }
-                },
-                onDispararCamara = onDispararCamara
+                    currentScreen = AppScreen.LOTES,
+                    onNavigate = { destino ->
+                        when (destino) {
+                            AppScreen.HOME -> onIrInicio()
+                            AppScreen.HISTORIAL -> onIrHistorial()
+                            AppScreen.SETTINGS -> onIrAjustes()
+                            else -> {}
+                        }
+                    },
+                    onDispararCamara = onDispararCamara
                 )
             }
         },
@@ -179,7 +227,7 @@ fun LotesScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                itemsIndexed(lotesFiltrados) { index, lote ->
+                itemsIndexed(lotesFiltrados) { _, lote ->
                     val esActivo = loteActivoActual.contains(lote.nombre)
 
                     Card(
@@ -191,13 +239,10 @@ fun LotesScreen(
                             1.dp,
                             if (esActivo) SemaforoVerde else AgroCardBorder
                         ),
+                        // La tarjeta ya no actúa como botón: tocar fuera de la foto/mapa no
+                        // selecciona el lote ni redirige al Inicio (evita toques accidentales).
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                val textoLote = "${lote.nombre} (${lote.ubicacion}) • Fresa ${lote.variedad}"
-                                onSeleccionarLoteActivo(textoLote)
-                                Toast.makeText(context, "Lote activo: ${lote.nombre}", Toast.LENGTH_SHORT).show()
-                            }
                     ) {
                         Row(
                             modifier = Modifier
@@ -216,12 +261,17 @@ fun LotesScreen(
                                         .clip(CircleShape)
                                         .background(if (esActivo) SemaforoVerde else AgroMintBackground)
                                         .clickable {
-                                            loteFotoSeleccionadaIndex = index
-                                            loteFotoLauncher.launch("image/*")
+                                            loteFotoOpcionesId = lote.id
+                                            if (lote.fotoUri.isNullOrBlank()) {
+                                                loteFotoSeleccionadaId = lote.id
+                                                loteFotoLauncher.launch("image/*")
+                                            } else {
+                                                showDialogFotoOpciones = true
+                                            }
                                         },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (lote.fotoUri != null) {
+                                    if (!lote.fotoUri.isNullOrBlank()) {
                                         AsyncImage(
                                             model = lote.fotoUri,
                                             contentDescription = "Foto del lote",
@@ -262,7 +312,7 @@ fun LotesScreen(
                                             altura = 74.dp,
                                             modifier = Modifier.fillMaxWidth(0.95f),
                                             onClick = {
-                                                loteAjustandoIndex = index
+                                                loteAjustandoId = lote.id
                                                 showDialogAjustarMapa = true
                                             }
                                         )
@@ -270,7 +320,7 @@ fun LotesScreen(
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Surface(
                                             onClick = {
-                                                loteAjustandoIndex = index
+                                                loteAjustandoId = lote.id
                                                 showDialogAjustarMapa = true
                                             },
                                             shape = RoundedCornerShape(10.dp),
@@ -328,7 +378,7 @@ fun LotesScreen(
                                 // 1. Editar Lote
                                 Surface(
                                     onClick = {
-                                        loteAEditarIndex = index
+                                        loteAEditarId = lote.id
                                         showDialogEditarLote = true
                                     },
                                     shape = CircleShape,
@@ -367,7 +417,7 @@ fun LotesScreen(
                                 // 3. Eliminar Lote
                                 if (lotes.size > 1) {
                                     Surface(
-                                        onClick = { loteAEliminarIndex = index },
+                                        onClick = { loteAEliminarId = lote.id },
                                         shape = CircleShape,
                                         color = SemaforoRojoFondo,
                                         border = androidx.compose.foundation.BorderStroke(1.dp, SemaforoRojo.copy(alpha = 0.3f)),
@@ -406,37 +456,92 @@ fun LotesScreen(
             }
         }
 
+        // ================= DIÁLOGO OPCIONES DE FOTO DE LOTE =================
+        if (showDialogFotoOpciones && loteFotoOpcionesId != null) {
+            val idx = lotes.indexOfFirst { it.id == loteFotoOpcionesId }
+            if (idx != -1) {
+                val actual = lotes[idx]
+                AlertDialog(
+                    onDismissRequest = { showDialogFotoOpciones = false },
+                    title = { Text(actual.nombre, fontWeight = FontWeight.Bold, color = AgroGreenPrimary) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    showDialogFotoOpciones = false
+                                    loteFotoSeleccionadaId = actual.id
+                                    loteFotoLauncher.launch("image/*")
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                            ) {
+                                Text("Cambiar Foto", fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    showDialogFotoOpciones = false
+                                    lotes[idx] = actual.copy(fotoUri = null)
+                                    onLotesCambiados()
+                                    Toast.makeText(context, "Foto eliminada", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = SemaforoRojo),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SemaforoRojo),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                            ) {
+                                Text("Eliminar Foto", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { showDialogFotoOpciones = false }) {
+                            Text("Cancelar", color = TextGray)
+                        }
+                    },
+                    containerColor = AgroCardWhite,
+                    shape = RoundedCornerShape(20.dp)
+                )
+            }
+        }
+
         // ================= DIÁLOGO DE CONFIRMACIÓN DE BORRADO =================
-        if (loteAEliminarIndex != null) {
-            val loteABorrar = lotes[loteAEliminarIndex!!]
-            AlertDialog(
-                onDismissRequest = { loteAEliminarIndex = null },
-                icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = SemaforoRojo) },
-                title = { Text("¿Mover a la Papelera?", fontWeight = FontWeight.Bold) },
-                text = {
-                    Text("El lote '${loteABorrar.nombre}' será movido a la papelera. Podrás restaurarlo cuando desees.")
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            papeleraLotes.add(loteABorrar)
-                            lotes.removeAt(loteAEliminarIndex!!)
-                            loteAEliminarIndex = null
-                            Toast.makeText(context, "Lote movido a la papelera", Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = SemaforoRojo)
-                    ) {
-                        Text("Mover a Papelera")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { loteAEliminarIndex = null }) {
-                        Text("Cancelar", color = TextGray)
-                    }
-                },
-                containerColor = AgroCardWhite,
-                shape = RoundedCornerShape(20.dp)
-            )
+        if (loteAEliminarId != null) {
+            val idx = lotes.indexOfFirst { it.id == loteAEliminarId }
+            if (idx != -1) {
+                val loteABorrar = lotes[idx]
+                AlertDialog(
+                    onDismissRequest = { loteAEliminarId = null },
+                    icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = SemaforoRojo) },
+                    title = { Text("¿Mover a la Papelera?", fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text("El lote '${loteABorrar.nombre}' será movido a la papelera. Podrás restaurarlo cuando desees.")
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                papeleraLotes.add(loteABorrar)
+                                lotes.removeAt(idx)
+                                loteAEliminarId = null
+                                onLotesCambiados()
+                                Toast.makeText(context, "Lote movido a la papelera", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SemaforoRojo)
+                        ) {
+                            Text("Mover a Papelera")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { loteAEliminarId = null }) {
+                            Text("Cancelar", color = TextGray)
+                        }
+                    },
+                    containerColor = AgroCardWhite,
+                    shape = RoundedCornerShape(20.dp)
+                )
+            }
         }
 
         // ================= DIÁLOGO DE LA PAPELERA =================
@@ -479,6 +584,7 @@ fun LotesScreen(
                                             IconButton(onClick = {
                                                 lotes.add(pLote)
                                                 papeleraLotes.removeAt(pIndex)
+                                                onLotesCambiados()
                                                 Toast.makeText(context, "Lote restaurado", Toast.LENGTH_SHORT).show()
                                             }) {
                                                 Icon(Icons.Default.Restore, contentDescription = "Restaurar", tint = AgroGreenPrimary)
@@ -507,117 +613,151 @@ fun LotesScreen(
         }
 
         // ================= DIÁLOGO EXCLUSIVO: AJUSTAR UBICACIÓN CON MAPA GRANDE =================
-        if (showDialogAjustarMapa && loteAjustandoIndex != null && loteAjustandoIndex!! in lotes.indices) {
-            val loteActual = lotes[loteAjustandoIndex!!]
-            var latAjuste by remember { mutableDoubleStateOf(loteActual.latitud ?: -12.046374) }
-            var lonAjuste by remember { mutableDoubleStateOf(loteActual.longitud ?: -77.042793) }
-            var direccionDetectada by remember { mutableStateOf(loteActual.ubicacion) }
+        if (showDialogAjustarMapa && loteAjustandoId != null) {
+            val idx = lotes.indexOfFirst { it.id == loteAjustandoId }
+            if (idx != -1) {
+                val loteActual = lotes[idx]
+                var latAjuste by remember { mutableDoubleStateOf(loteActual.latitud ?: -12.046374) }
+                var lonAjuste by remember { mutableDoubleStateOf(loteActual.longitud ?: -77.042793) }
+                var direccionDetectada by remember { mutableStateOf(loteActual.ubicacion) }
 
-            AlertDialog(
-                onDismissRequest = { showDialogAjustarMapa = false },
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Place, contentDescription = null, tint = SemaforoRojo, modifier = Modifier.size(22.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text("Ajustar Ubicación", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TextDark)
-                            Text(loteActual.nombre, fontSize = 12.sp, color = AgroGreenPrimary, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = AgroMintBackground,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AgroGreenPrimary.copy(alpha = 0.25f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Info, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Arrastra el mapa para centrar el círculo rojo en la parcela. El punto azul es tu ubicación GPS.",
-                                    fontSize = 11.sp,
-                                    color = TextDark,
-                                    lineHeight = 14.sp
-                                )
+                AlertDialog(
+                    onDismissRequest = { showDialogAjustarMapa = false },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Place, contentDescription = null, tint = SemaforoRojo, modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Ajustar Ubicación", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TextDark)
+                                Text(loteActual.nombre, fontSize = 12.sp, color = AgroGreenPrimary, fontWeight = FontWeight.SemiBold)
                             }
                         }
-
-                        // Mapa Selector Grande con 2 Puntos (Tú y Parcela)
-                        MapaSelectorParcela(
-                            latInicial = latAjuste,
-                            lonInicial = lonAjuste,
-                            radioMetros = 10,
-                            altura = 340.dp,
-                            onCoordenadasCambiadas = { nuevaLat, nuevaLon ->
-                                latAjuste = nuevaLat
-                                lonAjuste = nuevaLon
-                                coroutineScope.launch {
-                                    val dir = GeocodingHelper.obtenerDireccionLegible(context, nuevaLat, nuevaLon)
-                                    direccionDetectada = dir
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = AgroMintBackground,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AgroGreenPrimary.copy(alpha = 0.25f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Arrastra el mapa para centrar el círculo rojo en la parcela. El punto azul es tu ubicación GPS.",
+                                        fontSize = 11.sp,
+                                        color = TextDark,
+                                        lineHeight = 14.sp
+                                    )
                                 }
                             }
-                        )
 
-                        // Dirección geocodificada en tiempo real
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = AgroCardWhite,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            // Botón directo: Centrar parcela en mi GPS actual
+                            Surface(
+                                onClick = {
+                                    ejecutarConPermisoUbicacion {
+                                        GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
+                                            latAjuste = lat
+                                            lonAjuste = lon
+                                            coroutineScope.launch {
+                                                val dir = GeocodingHelper.obtenerDireccionLegible(context, lat, lon)
+                                                direccionDetectada = dir
+                                            }
+                                            Toast.makeText(context, "Parcela fijada en tu posición GPS actual ✓", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = AgroMintBackground,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AgroGreenPrimary.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.LocationOn, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = direccionDetectada,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = TextDark
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.MyLocation, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Fijar con mi posición GPS actual", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = AgroGreenPrimary)
+                                }
+                            }
+
+                            // Mapa Selector Grande con 2 Puntos (Tú y Parcela)
+                            MapaSelectorParcela(
+                                latInicial = latAjuste,
+                                lonInicial = lonAjuste,
+                                radioMetros = 10,
+                                altura = 340.dp,
+                                onCoordenadasCambiadas = { nuevaLat, nuevaLon ->
+                                    latAjuste = nuevaLat
+                                    lonAjuste = nuevaLon
+                                    coroutineScope.launch {
+                                        val dir = GeocodingHelper.obtenerDireccionLegible(context, nuevaLat, nuevaLon)
+                                        direccionDetectada = dir
+                                    }
+                                }
+                            )
+
+                            // Dirección geocodificada en tiempo real
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = AgroCardWhite,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = direccionDetectada,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = TextDark
+                                    )
+                                }
                             }
                         }
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val loteModificado = loteActual.copy(
-                                latitud = latAjuste,
-                                longitud = lonAjuste,
-                                ubicacion = if (direccionDetectada.isNotBlank()) direccionDetectada else loteActual.ubicacion
-                            )
-                            lotes[loteAjustandoIndex!!] = loteModificado
-                            showDialogAjustarMapa = false
-                            Toast.makeText(context, "Ubicación de parcela actualizada ✓", Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Guardar Ubicación", fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDialogAjustarMapa = false }) {
-                        Text("Cancelar", color = TextGray)
-                    }
-                },
-                containerColor = AgroCardWhite,
-                shape = RoundedCornerShape(22.dp)
-            )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                val loteModificado = loteActual.copy(
+                                    latitud = latAjuste,
+                                    longitud = lonAjuste,
+                                    ubicacion = if (direccionDetectada.isNotBlank()) direccionDetectada else loteActual.ubicacion
+                                )
+                                lotes[idx] = loteModificado
+                                onLotesCambiados()
+                                showDialogAjustarMapa = false
+                                Toast.makeText(context, "Ubicación de parcela actualizada ✓", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Guardar Ubicación", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDialogAjustarMapa = false }) {
+                            Text("Cancelar", color = TextGray)
+                        }
+                    },
+                    containerColor = AgroCardWhite,
+                    shape = RoundedCornerShape(22.dp)
+                )
+            }
         }
 
         // ================= DIÁLOGO PARA AÑADIR NUEVO LOTE =================
@@ -627,24 +767,6 @@ fun LotesScreen(
             var ubicacionInput by remember { mutableStateOf("") }
             var coordsCapturadas by remember { mutableStateOf<Pair<Double, Double>?>(null) }
             var buscandoGps by remember { mutableStateOf(false) }
-
-            val locationPermissionLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.RequestMultiplePermissions()
-            ) { permissions ->
-                val concedido = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-                if (concedido) {
-                    buscandoGps = true
-                    GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
-                        coordsCapturadas = Pair(lat, lon)
-                        buscandoGps = false
-                        Toast.makeText(context, "GPS fijado al instante", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    buscandoGps = false
-                    Toast.makeText(context, "Se necesita permiso de ubicación para vincular el lote", Toast.LENGTH_LONG).show()
-                }
-            }
 
             AlertDialog(
                 onDismissRequest = { showDialogNuevoLote = false },
@@ -663,14 +785,7 @@ fun LotesScreen(
                         // Botón de captura GPS Ultrarrápida
                         Surface(
                             onClick = {
-                                if (!GpsLocationHelper.tienePermisoUbicacion(context)) {
-                                    globalLocationPermissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
-                                    )
-                                } else {
+                                ejecutarConPermisoUbicacion {
                                     buscandoGps = true
                                     GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
                                         coordsCapturadas = Pair(lat, lon)
@@ -681,7 +796,7 @@ fun LotesScreen(
                                                 ubicacionInput = dir
                                             }
                                         }
-                                        Toast.makeText(context, "Ubicación fijada con éxito", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Ubicación fijada con éxito ✓", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },
@@ -749,7 +864,7 @@ fun LotesScreen(
                             if (nombreLoteInput.trim().isNotEmpty()) {
                                 lotes.add(
                                     LoteItem(
-                                        id = lotes.size + 1,
+                                        id = (lotes.maxOfOrNull { it.id } ?: 0) + 1,
                                         nombre = nombreLoteInput.trim(),
                                         variedad = if (variedadInput.trim().isNotEmpty()) variedadInput.trim() else "Albión",
                                         ubicacion = if (ubicacionInput.trim().isNotEmpty()) ubicacionInput.trim() else "Sector General",
@@ -759,8 +874,9 @@ fun LotesScreen(
                                         longitud = coordsCapturadas?.second
                                     )
                                 )
+                                onLotesCambiados()
                                 showDialogNuevoLote = false
-                                Toast.makeText(context, "Lote registrado", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Lote registrado ✓", Toast.LENGTH_SHORT).show()
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary)
@@ -773,138 +889,135 @@ fun LotesScreen(
         }
 
         // ================= DIÁLOGO PARA EDITAR LOTE =================
-        if (showDialogEditarLote && loteAEditarIndex != null) {
-            val loteActual = lotes[loteAEditarIndex!!]
-            var editNombre by remember { mutableStateOf(loteActual.nombre) }
-            var editVariedad by remember { mutableStateOf(loteActual.variedad) }
-            var editUbicacion by remember { mutableStateOf(loteActual.ubicacion) }
-            var editLat by remember { mutableStateOf(loteActual.latitud) }
-            var editLon by remember { mutableStateOf(loteActual.longitud) }
-            var actualizandoGps by remember { mutableStateOf(false) }
+        if (showDialogEditarLote && loteAEditarId != null) {
+            val idx = lotes.indexOfFirst { it.id == loteAEditarId }
+            if (idx != -1) {
+                val loteActual = lotes[idx]
+                var editNombre by remember { mutableStateOf(loteActual.nombre) }
+                var editVariedad by remember { mutableStateOf(loteActual.variedad) }
+                var editUbicacion by remember { mutableStateOf(loteActual.ubicacion) }
+                var editLat by remember { mutableStateOf(loteActual.latitud) }
+                var editLon by remember { mutableStateOf(loteActual.longitud) }
+                var actualizandoGps by remember { mutableStateOf(false) }
 
-            AlertDialog(
-                onDismissRequest = { showDialogEditarLote = false },
-                title = { Text("Editar ${loteActual.nombre}", fontWeight = FontWeight.Bold, color = AgroGreenPrimary) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedTextField(value = editNombre, onValueChange = { editNombre = it }, label = { Text("Nombre") })
-                        OutlinedTextField(value = editVariedad, onValueChange = { editVariedad = it }, label = { Text("Variedad") })
-                        OutlinedTextField(value = editUbicacion, onValueChange = { editUbicacion = it }, label = { Text("Ubicación") })
+                AlertDialog(
+                    onDismissRequest = { showDialogEditarLote = false },
+                    title = { Text("Editar ${loteActual.nombre}", fontWeight = FontWeight.Bold, color = AgroGreenPrimary) },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(value = editNombre, onValueChange = { editNombre = it }, label = { Text("Nombre") })
+                            OutlinedTextField(value = editVariedad, onValueChange = { editVariedad = it }, label = { Text("Variedad") })
+                            OutlinedTextField(value = editUbicacion, onValueChange = { editUbicacion = it }, label = { Text("Ubicación") })
 
-                        // Botón para Modificar / Actualizar GPS del Lote
-                        Surface(
-                            onClick = {
-                                if (!GpsLocationHelper.tienePermisoUbicacion(context)) {
-                                    globalLocationPermissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                            // Botón para Modificar / Actualizar GPS del Lote
+                            Surface(
+                                onClick = {
+                                    ejecutarConPermisoUbicacion {
+                                        actualizandoGps = true
+                                        GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
+                                            editLat = lat
+                                            editLon = lon
+                                            actualizandoGps = false
+                                            coroutineScope.launch {
+                                                val dir = GeocodingHelper.obtenerDireccionLegible(context, lat, lon)
+                                                editUbicacion = dir
+                                            }
+                                            Toast.makeText(context, "Nueva ubicación fijada ✓", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (editLat != null) SemaforoVerdeFondo else AgroMintBackground,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, if (editLat != null) SemaforoVerde else AgroCardBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (actualizandoGps) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp,
+                                            color = AgroGreenPrimary
                                         )
-                                    )
-                                } else {
-                                    actualizandoGps = true
-                                    GpsLocationHelper.obtenerUbicacionActual(context) { lat, lon ->
-                                        editLat = lat
-                                        editLon = lon
-                                        actualizandoGps = false
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.LocationOn,
+                                            contentDescription = "GPS",
+                                            tint = if (editLat != null) SemaforoVerde else AgroGreenPrimary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = when {
+                                                actualizandoGps -> "Actualizando ubicación GPS..."
+                                                editLat != null -> "Ubicación GPS registrada ✓"
+                                                else -> "Vincular GPS actual del Lote"
+                                            },
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = if (editLat != null) SemaforoVerde else AgroGreenPrimary
+                                        )
+                                        Text(
+                                            text = if (editLat != null && editLon != null) "Ubicación fijada en el mapa (Radio 10m)" else "Toca para fijar tu ubicación actual",
+                                            fontSize = 10.sp,
+                                            color = TextGray
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Mapa Interactivo en Edición (Mover puntero libremente)
+                            if (editLat != null && editLon != null) {
+                                MapaSelectorParcela(
+                                    latInicial = editLat!!,
+                                    lonInicial = editLon!!,
+                                    radioMetros = 10,
+                                    altura = 300.dp,
+                                    onCoordenadasCambiadas = { nuevaLat, nuevaLon ->
+                                        editLat = nuevaLat
+                                        editLon = nuevaLon
                                         coroutineScope.launch {
-                                            val dir = GeocodingHelper.obtenerDireccionLegible(context, lat, lon)
+                                            val dir = GeocodingHelper.obtenerDireccionLegible(context, nuevaLat, nuevaLon)
                                             editUbicacion = dir
                                         }
-                                        Toast.makeText(context, "Nueva ubicación fijada", Toast.LENGTH_SHORT).show()
                                     }
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (editNombre.trim().isNotEmpty()) {
+                                    lotes[idx] = loteActual.copy(
+                                        nombre = editNombre.trim(),
+                                        variedad = editVariedad.trim(),
+                                        ubicacion = editUbicacion.trim(),
+                                        latitud = editLat,
+                                        longitud = editLon
+                                    )
+                                    onLotesCambiados()
+                                    showDialogEditarLote = false
+                                    Toast.makeText(context, "Lote actualizado ✓", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (editLat != null) SemaforoVerdeFondo else AgroMintBackground,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (editLat != null) SemaforoVerde else AgroCardBorder),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (actualizandoGps) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                        color = AgroGreenPrimary
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.LocationOn,
-                                        contentDescription = "GPS",
-                                        tint = if (editLat != null) SemaforoVerde else AgroGreenPrimary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = when {
-                                            actualizandoGps -> "Actualizando ubicación GPS..."
-                                            editLat != null -> "Ubicación GPS registrada ✓"
-                                            else -> "Vincular GPS actual del Lote"
-                                        },
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp,
-                                        color = if (editLat != null) SemaforoVerde else AgroGreenPrimary
-                                    )
-                                    Text(
-                                        text = if (editLat != null && editLon != null) "Ubicación fijada en el mapa (Radio 10m)" else "Toca para fijar tu ubicación actual",
-                                        fontSize = 10.sp,
-                                        color = TextGray
-                                    )
-                                }
-                            }
-                        }
-
-                        // Mapa Interactivo en Edición (Mover puntero libremente)
-                        if (editLat != null && editLon != null) {
-                            MapaSelectorParcela(
-                                latInicial = editLat!!,
-                                lonInicial = editLon!!,
-                                radioMetros = 10,
-                                altura = 300.dp,
-                                onCoordenadasCambiadas = { nuevaLat, nuevaLon ->
-                                    editLat = nuevaLat
-                                    editLon = nuevaLon
-                                    coroutineScope.launch {
-                                        val dir = GeocodingHelper.obtenerDireccionLegible(context, nuevaLat, nuevaLon)
-                                        editUbicacion = dir
-                                    }
-                                }
-                            )
-                        }
+                            colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary)
+                        ) { Text("Guardar Cambios") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDialogEditarLote = false }) { Text("Cancelar") }
                     }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (editNombre.trim().isNotEmpty()) {
-                                lotes[loteAEditarIndex!!] = loteActual.copy(
-                                    nombre = editNombre.trim(),
-                                    variedad = editVariedad.trim(),
-                                    ubicacion = editUbicacion.trim(),
-                                    latitud = editLat,
-                                    longitud = editLon
-                                )
-                                showDialogEditarLote = false
-                                Toast.makeText(context, "Lote actualizado", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary)
-                    ) { Text("Guardar Cambios") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDialogEditarLote = false }) { Text("Cancelar") }
-                }
-            )
+                )
+            }
         }
     }
 }

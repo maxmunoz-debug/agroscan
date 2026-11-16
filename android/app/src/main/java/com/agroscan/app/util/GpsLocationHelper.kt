@@ -10,6 +10,7 @@ import android.location.LocationManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.agroscan.app.data.LoteItem
 import com.google.android.gms.location.LocationServices
@@ -24,11 +25,17 @@ object GpsLocationHelper {
         return fine || coarse
     }
 
+    fun gpsEstaHabilitado(context: Context): Boolean {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+        return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+               locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
     /**
-     * Obtiene la ubicación de forma inmediata y garantizada.
-     * 1. Consulta la caché Fused y LocationManager nativo (0.01 segundos).
-     * 2. Si no hay caché, lanza solicitud a Fused y a LocationManager en paralelo.
-     * 3. Timeout garantizado a los 3 segundos para no dejar al usuario esperando.
+     * Obtiene la ubicación física real y precisa del dispositivo.
+     * 1. Consulta inmediatamente la última ubicación conocida (Fused + LocationManager) en <50ms.
+     * 2. En paralelo solicita una lectura de alta precisión (Priority.PRIORITY_HIGH_ACCURACY).
+     * 3. Si llega una lectura fresca más precisa, actualiza al llamador.
      */
     @SuppressLint("MissingPermission")
     fun obtenerUbicacionActual(
@@ -37,51 +44,57 @@ object GpsLocationHelper {
     ) {
         if (!tienePermisoUbicacion(context)) return
 
+        if (!gpsEstaHabilitado(context)) {
+            Toast.makeText(context, "Por favor activa el GPS / Ubicación de tu teléfono", Toast.LENGTH_SHORT).show()
+        }
+
         var entregado = false
-        fun responder(lat: Double, lon: Double) {
-            if (!entregado) {
-                entregado = true
-                Handler(Looper.getMainLooper()).post {
-                    onUbicacionObtenida(lat, lon)
+        fun responder(lat: Double, lon: Double, forzarActualizacion: Boolean = false) {
+            if (lat != 0.0 && lon != 0.0) {
+                if (!entregado || forzarActualizacion) {
+                    entregado = true
+                    Handler(Looper.getMainLooper()).post {
+                        onUbicacionObtenida(lat, lon)
+                    }
                 }
             }
         }
 
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
 
-        // PASO 1: Probar inmediatamente con caché nativa (es instantánea en Android Samsung)
+        // PASO 1: Obtener INMEDIATAMENTE la última ubicación conocida de Google Play Services (<50ms)
+        try {
+            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            fusedClient.lastLocation.addOnSuccessListener { last ->
+                if (last != null) {
+                    responder(last.latitude, last.longitude)
+                }
+            }
+
+            // PASO 2: Solicitar lectura satelital de alta precisión fresca
+            fusedClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                .addOnSuccessListener { fresh ->
+                    if (fresh != null) {
+                        responder(fresh.latitude, fresh.longitude, forzarActualizacion = true)
+                    }
+                }
+        } catch (_: Exception) {}
+
+        // PASO 3: Revisar caché de LocationManager nativo inmediatamente (fallback instantáneo)
         if (locationManager != null) {
             for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)) {
                 try {
                     val loc = locationManager.getLastKnownLocation(prov)
-                    if (loc != null) {
+                    if (loc != null && !entregado) {
                         responder(loc.latitude, loc.longitude)
-                        return
                     }
                 } catch (_: Exception) {}
             }
-        }
 
-        // PASO 2: Probar con FusedLocation de Google Play Services
-        try {
-            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-            fusedClient.lastLocation.addOnSuccessListener { loc ->
-                if (loc != null) {
-                    responder(loc.latitude, loc.longitude)
-                } else {
-                    fusedClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
-                        .addOnSuccessListener { fresh ->
-                            if (fresh != null) responder(fresh.latitude, fresh.longitude)
-                        }
-                }
-            }
-        } catch (_: Exception) {}
-
-        // PASO 3: En paralelo, escuchar actualizaciones de red
-        if (locationManager != null && !entregado) {
+            // PASO 4: Escuchar actualizaciones de satélites en vivo
             val listener = object : LocationListener {
                 override fun onLocationChanged(location: Location) {
-                    responder(location.latitude, location.longitude)
+                    responder(location.latitude, location.longitude, forzarActualizacion = true)
                     try { locationManager.removeUpdates(this) } catch (_: Exception) {}
                 }
                 @Deprecated("Deprecated in Java")
@@ -90,21 +103,31 @@ object GpsLocationHelper {
                 override fun onProviderDisabled(provider: String) {}
             }
 
-            for (prov in listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)) {
+            for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
                 try {
                     if (locationManager.isProviderEnabled(prov)) {
-                        locationManager.requestLocationUpdates(prov, 0L, 0f, listener, Looper.getMainLooper())
+                        locationManager.requestLocationUpdates(prov, 1000L, 1f, listener, Looper.getMainLooper())
                     }
                 } catch (_: Exception) {}
             }
 
-            // Timeout de seguridad: a los 3 segundos corta la búsqueda y responde para no congelar la UI
+            // Timeout de seguridad a los 8 segundos
             Handler(Looper.getMainLooper()).postDelayed({
                 try { locationManager.removeUpdates(listener) } catch (_: Exception) {}
                 if (!entregado) {
+                    for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)) {
+                        try {
+                            val loc = locationManager.getLastKnownLocation(prov)
+                            if (loc != null) {
+                                responder(loc.latitude, loc.longitude)
+                                return@postDelayed
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    // Si el teléfono no tiene señal en absoluto, centro estándar
                     responder(-12.046374, -77.042793)
                 }
-            }, 3000L)
+            }, 8000L)
         }
     }
 
@@ -138,25 +161,19 @@ object GpsLocationHelper {
         radioMaximoMetros: Double = 100.0
     ): Pair<LoteItem, Int>? {
         var loteMasCercano: LoteItem? = null
-        var menorDistancia = Double.MAX_VALUE
+        var distanciaMinima = Double.MAX_VALUE
 
         for (lote in lotes) {
-            val lat = lote.latitud
-            val lon = lote.longitud
-            if (lat != null && lon != null) {
-                val distancia = calcularDistanciaMetros(latUsuario, lonUsuario, lat, lon)
-                if (distancia < menorDistancia) {
-                    menorDistancia = distancia
-                    loteMasCercano = lote
-                }
+            val latLote = lote.latitud ?: continue
+            val lonLote = lote.longitud ?: continue
+
+            val dist = calcularDistanciaMetros(latUsuario, lonUsuario, latLote, lonLote)
+            if (dist <= radioMaximoMetros && dist < distanciaMinima) {
+                distanciaMinima = dist
+                loteMasCercano = lote
             }
         }
 
-        // Si hay algún lote registrado con coordenadas, devolver el más cercano
-        return if (loteMasCercano != null) {
-            Pair(loteMasCercano, menorDistancia.roundToInt())
-        } else {
-            null
-        }
+        return loteMasCercano?.let { Pair(it, distanciaMinima.toInt()) }
     }
 }

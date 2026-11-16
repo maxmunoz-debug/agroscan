@@ -41,6 +41,7 @@ fun HomeScreen(
     parcelaActual: String = "Lote 1 • Fresa Albión",
     historial: List<EvaluacionHistorial> = emptyList(),
     lotes: List<LoteItem> = emptyList(),
+    userEmail: String = "",
     onIniciarEvaluacion: () -> Unit,
     onCambiarParcela: (String) -> Unit = {},
     onIrHistorial: () -> Unit = {},
@@ -175,7 +176,9 @@ fun HomeScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             val context = LocalContext.current
-                            val fotoPerfil = remember { java.io.File(context.filesDir, "perfil_usuario.jpg") }
+                            val sanitizedEmail = userEmail.trim().lowercase().replace("@", "_").replace(".", "_")
+                            val photoFileName = if (sanitizedEmail.isNotBlank()) "perfil_${sanitizedEmail}.jpg" else "perfil_usuario.jpg"
+                            val fotoPerfil = remember(sanitizedEmail) { java.io.File(context.filesDir, photoFileName) }
                             if (fotoPerfil.exists()) {
                                 Image(
                                     painter = coil.compose.rememberAsyncImagePainter(fotoPerfil),

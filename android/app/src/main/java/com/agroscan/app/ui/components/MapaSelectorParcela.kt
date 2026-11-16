@@ -1,5 +1,6 @@
 package com.agroscan.app.ui.components
 
+import android.Manifest
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -7,6 +8,9 @@ import android.graphics.Paint
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.view.MotionEvent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -90,6 +94,47 @@ fun MapaSelectorParcela(
     var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
     var myLocationMarker by remember { mutableStateOf<Marker?>(null) }
 
+    fun actualizarMarcadorUsuario(map: MapView, lat: Double, lon: Double) {
+        val punto = GeoPoint(lat, lon)
+        if (myLocationMarker == null) {
+            val marker = Marker(map).apply {
+                position = punto
+                title = "Tú estás aquí"
+                icon = crearIconoGpsUsuario(context)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            }
+            map.overlays.add(marker)
+            myLocationMarker = marker
+        } else {
+            myLocationMarker?.position = punto
+        }
+        map.invalidate()
+    }
+
+    val locationPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val ok = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                 perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (ok) {
+            GpsLocationHelper.obtenerUbicacionActual(context) { gpsLat, gpsLon ->
+                latGpsUsuario = gpsLat
+                lonGpsUsuario = gpsLon
+                mapViewInstance?.let { map ->
+                    actualizarMarcadorUsuario(map, gpsLat, gpsLon)
+                    map.controller.animateTo(GeoPoint(gpsLat, gpsLon))
+                    map.controller.setZoom(18.5)
+                }
+                latActual = gpsLat
+                lonActual = gpsLon
+                onCoordenadasCambiadas(gpsLat, gpsLon)
+                Toast.makeText(context, "Ubicación fijada en tu posición actual ✓", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Se requiere permiso de ubicación", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // Calcular distancia en tiempo real entre el usuario y el punto fijado
     val distanciaMetros = remember(latActual, lonActual, latGpsUsuario, lonGpsUsuario) {
         if (latGpsUsuario != null && lonGpsUsuario != null) {
@@ -109,19 +154,15 @@ fun MapaSelectorParcela(
             lonGpsUsuario = gpsLon
 
             mapViewInstance?.let { map ->
-                if (myLocationMarker == null) {
-                    val marker = Marker(map).apply {
-                        position = GeoPoint(gpsLat, gpsLon)
-                        title = "Tú estás aquí"
-                        icon = crearIconoGpsUsuario(context)
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    }
-                    map.overlays.add(marker)
-                    myLocationMarker = marker
-                } else {
-                    myLocationMarker?.position = GeoPoint(gpsLat, gpsLon)
+                actualizarMarcadorUsuario(map, gpsLat, gpsLon)
+                // Si la coordenada inicial era la por defecto de Tecsup (-12.046374, -77.042793),
+                // centrar automáticamente en la ubicación física real del usuario
+                if (latInicial == -12.046374 && lonInicial == -77.042793) {
+                    map.controller.animateTo(GeoPoint(gpsLat, gpsLon))
+                    latActual = gpsLat
+                    lonActual = gpsLon
+                    onCoordenadasCambiadas(gpsLat, gpsLon)
                 }
-                map.invalidate()
             }
         }
     }
@@ -146,15 +187,7 @@ fun MapaSelectorParcela(
                     GpsLocationHelper.obtenerUbicacionActual(ctx) { gLat, gLon ->
                         latGpsUsuario = gLat
                         lonGpsUsuario = gLon
-                        val marker = Marker(this).apply {
-                            position = GeoPoint(gLat, gLon)
-                            title = "Tú estás aquí"
-                            icon = crearIconoGpsUsuario(ctx)
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        }
-                        overlays.add(marker)
-                        myLocationMarker = marker
-                        invalidate()
+                        actualizarMarcadorUsuario(this, gLat, gLon)
                     }
 
                     setOnTouchListener { v, event ->
@@ -245,14 +278,27 @@ fun MapaSelectorParcela(
         ) {
             FloatingActionButton(
                 onClick = {
-                    GpsLocationHelper.obtenerUbicacionActual(context) { gpsLat, gpsLon ->
-                        latGpsUsuario = gpsLat
-                        lonGpsUsuario = gpsLon
-                        myLocationMarker?.position = GeoPoint(gpsLat, gpsLon)
-                        mapViewInstance?.controller?.animateTo(GeoPoint(gpsLat, gpsLon))
-                        latActual = gpsLat
-                        lonActual = gpsLon
-                        onCoordenadasCambiadas(gpsLat, gpsLon)
+                    if (!GpsLocationHelper.tienePermisoUbicacion(context)) {
+                        locationPermLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    } else {
+                        GpsLocationHelper.obtenerUbicacionActual(context) { gpsLat, gpsLon ->
+                            latGpsUsuario = gpsLat
+                            lonGpsUsuario = gpsLon
+                            mapViewInstance?.let { map ->
+                                actualizarMarcadorUsuario(map, gpsLat, gpsLon)
+                                map.controller.animateTo(GeoPoint(gpsLat, gpsLon))
+                                map.controller.setZoom(18.5)
+                            }
+                            latActual = gpsLat
+                            lonActual = gpsLon
+                            onCoordenadasCambiadas(gpsLat, gpsLon)
+                            Toast.makeText(context, "Ubicación fijada en tu posición actual ✓", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 },
                 shape = CircleShape,

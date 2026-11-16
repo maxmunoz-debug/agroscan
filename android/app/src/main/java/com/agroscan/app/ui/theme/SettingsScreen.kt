@@ -57,6 +57,7 @@ import java.net.URL
 @Composable
 fun SettingsScreen(
     userName: String,
+    userEmail: String = "",
     serverUrl: String,
     lotes: MutableList<LoteItem>,
     papeleraLotes: MutableList<LoteItem>,
@@ -79,21 +80,28 @@ fun SettingsScreen(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { }
 
-    // Estados reales del Perfil persistidos
+    // Estados reales del Perfil persistidos de forma aislada por usuario
     val prefs = remember { context.getSharedPreferences("agroscan_prefs", Context.MODE_PRIVATE) }
-    val savedPhotoFile = remember { File(context.filesDir, "perfil_usuario.jpg") }
-    var userPhotoPath by remember {
-        mutableStateOf(if (savedPhotoFile.exists()) savedPhotoFile.absolutePath else prefs.getString("user_photo_path", null))
+    val effectiveEmail = if (userEmail.isNotBlank()) userEmail else (prefs.getString("user_email", "evaluador@tecsup.edu.pe") ?: "evaluador@tecsup.edu.pe")
+    val sanitizedEmail = effectiveEmail.trim().lowercase().replace("@", "_").replace(".", "_")
+    val photoFileName = if (sanitizedEmail.isNotBlank()) "perfil_${sanitizedEmail}.jpg" else "perfil_usuario.jpg"
+    val photoPrefKey = if (sanitizedEmail.isNotBlank()) "user_photo_path_${sanitizedEmail}" else "user_photo_path"
+
+    val savedPhotoFile = remember(sanitizedEmail) { File(context.filesDir, photoFileName) }
+    var userPhotoPath by remember(sanitizedEmail) {
+        val path = if (savedPhotoFile.exists()) savedPhotoFile.absolutePath else prefs.getString(photoPrefKey, null)
+        mutableStateOf(path)
     }
     var userRole by remember {
         mutableStateOf(prefs.getString("user_role", "Evaluador Fitosanitario") ?: "Evaluador Fitosanitario")
     }
-    var userEmail by remember {
-        mutableStateOf(prefs.getString("user_email", "evaluador@tecsup.edu.pe") ?: "evaluador@tecsup.edu.pe")
+    var userEmailActual by remember(effectiveEmail) {
+        mutableStateOf(effectiveEmail)
     }
 
     // Diálogos
     var showDialogEditarPerfil by remember { mutableStateOf(false) }
+    var showDialogFotoPerfilOpciones by remember { mutableStateOf(false) }
     var showDialogEditarIp by remember { mutableStateOf(false) }
     var showDialogNuevoLote by remember { mutableStateOf(false) }
     var showDialogPapelera by remember { mutableStateOf(false) }
@@ -113,15 +121,35 @@ fun SettingsScreen(
     var estadoEsp32 by remember { mutableStateOf("No verificada") }
 
     // CONTROL REAL DE BRILLO SOLAR
-    var modoAltoContraste by remember { mutableStateOf(false) }
+    // El estado se guarda en preferencias para que NO se reinicie al deslizar entre pestañas
+    // (antes se perdía al recrearse la página y el brillo volvía al automático sin avisar).
+    val prefsBrillo = remember { context.getSharedPreferences("agroscan_prefs", android.content.Context.MODE_PRIVATE) }
+    var modoAltoContraste by remember { mutableStateOf(prefsBrillo.getBoolean("modo_solar_activo", false)) }
+
+    // ¿El usuario tiene el brillo automático (adaptativo) del sistema activado?
+    val brilloAutomaticoSistema = remember(modoAltoContraste) {
+        try {
+            android.provider.Settings.System.getInt(
+                context.contentResolver,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE
+            ) == android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+        } catch (_: Exception) { false }
+    }
 
     LaunchedEffect(modoAltoContraste) {
         activity?.window?.let { window ->
-            val layoutParams = window.attributes
-            layoutParams.screenBrightness = if (modoAltoContraste) {
-                1.0f
+            // Se crea una COPIA de los parámetros: en One UI modificar la instancia viva
+            // a veces no dispara la actualización y el brillo queda en un valor intermedio.
+            val layoutParams = WindowManager.LayoutParams()
+            layoutParams.copyFrom(window.attributes)
+            if (modoAltoContraste) {
+                // BRIGHTNESS_OVERRIDE_FULL = 1.0f → 100 % del panel, ignorando el sensor de luz
+                layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else {
-                WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                // Devuelve el control exacto al sistema (brillo manual/automático del usuario)
+                layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
             window.attributes = layoutParams
         }
@@ -140,14 +168,14 @@ fun SettingsScreen(
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                val destFile = File(context.filesDir, "perfil_usuario.jpg")
+                val destFile = File(context.filesDir, photoFileName)
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(destFile).use { output ->
                         input.copyTo(output)
                     }
                 }
                 userPhotoPath = destFile.absolutePath
-                prefs.edit().putString("user_photo_path", destFile.absolutePath).apply()
+                prefs.edit().putString(photoPrefKey, destFile.absolutePath).apply()
                 Toast.makeText(context, "Foto de perfil guardada con éxito", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(context, "Error al guardar foto: " + (e.localizedMessage ?: "error"), Toast.LENGTH_SHORT).show()
@@ -213,7 +241,13 @@ fun SettingsScreen(
                             .size(68.dp)
                             .clip(CircleShape)
                             .background(AgroGreenPrimary)
-                            .clickable { photoPickerLauncher.launch("image/*") },
+                            .clickable {
+                                if (userPhotoPath.isNullOrBlank()) {
+                                    photoPickerLauncher.launch("image/*")
+                                } else {
+                                    showDialogFotoPerfilOpciones = true
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         val fotoFile = userPhotoPath?.let { File(it) }
@@ -266,9 +300,9 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Medium,
                             color = AgroGreenPrimary
                         )
-                        if (userEmail.isNotEmpty()) {
+                        if (userEmailActual.isNotEmpty()) {
                             Text(
-                                text = userEmail,
+                                text = userEmailActual,
                                 fontSize = 11.sp,
                                 color = TextGray
                             )
@@ -535,18 +569,43 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("Modo Alto Contraste Solar ☀️", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
-                            Text("Ajusta el brillo al 100% para trabajo bajo sol", fontSize = 11.sp, color = TextGray)
+                            Text(
+                                text = if (modoAltoContraste) "💡 Activo: brillo de pantalla al 100% y pantalla siempre encendida"
+                                else "Ajusta el brillo al 100% para trabajo bajo sol",
+                                fontSize = 11.sp,
+                                color = if (modoAltoContraste) AgroGreenPrimary else TextGray,
+                                fontWeight = if (modoAltoContraste) FontWeight.SemiBold else FontWeight.Normal
+                            )
                         }
                         Switch(
                             checked = modoAltoContraste,
-                            onCheckedChange = { modoAltoContraste = it },
+                            onCheckedChange = { activo ->
+                                modoAltoContraste = activo
+                                prefsBrillo.edit().putBoolean("modo_solar_activo", activo).apply()
+                                Toast.makeText(
+                                    context,
+                                    if (activo) "☀️ Brillo al 100% activado" else "Brillo devuelto al ajuste del sistema",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
                             colors = SwitchDefaults.colors(checkedThumbColor = AgroGreenPrimary, checkedTrackColor = SemaforoVerdeFondo)
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = AgroCardBorder)
+                    // Aviso útil: con brillo automático, Samsung puede superar el 100 % manual bajo sol directo
+                    if (modoAltoContraste && brilloAutomaticoSistema) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Nota: tu brillo automático está activado. Bajo sol muy intenso, el modo automático de Samsung puede dar un brillo extra; si notas la pantalla más oscura, desactiva este modo.",
+                            fontSize = 10.5.sp,
+                            color = TextGray,
+                            lineHeight = 14.sp
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = AgroCardBorder)
 
                     Row(
                         modifier = Modifier
@@ -566,7 +625,7 @@ fun SettingsScreen(
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextGray)
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = AgroCardBorder)
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = AgroCardBorder)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -575,7 +634,7 @@ fun SettingsScreen(
                     ) {
                         Column {
                             Text("Versión agroScan", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextDark)
-                            Text("v1.0 (Compilación de campo 2026.10)", fontSize = 11.sp, color = TextGray)
+                            Text("v2.1 (Edición Fitosanitaria Tecsup 2026.11)", fontSize = 11.sp, color = TextGray)
                         }
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -719,11 +778,61 @@ fun SettingsScreen(
             )
         }
 
+        // ================= DIÁLOGO OPCIONES DE FOTO DE PERFIL =================
+        if (showDialogFotoPerfilOpciones) {
+            AlertDialog(
+                onDismissRequest = { showDialogFotoPerfilOpciones = false },
+                title = { Text("Foto de Perfil", fontWeight = FontWeight.Bold, color = AgroGreenPrimary) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                showDialogFotoPerfilOpciones = false
+                                photoPickerLauncher.launch("image/*")
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                        ) {
+                            Text("Cambiar Foto", fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                showDialogFotoPerfilOpciones = false
+                                try {
+                                    val f = savedPhotoFile
+                                    if (f.exists()) f.delete()
+                                } catch (_: Exception) {}
+                                prefs.edit().remove(photoPrefKey).apply()
+                                userPhotoPath = null
+                                Toast.makeText(context, "Foto eliminada", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = SemaforoRojo),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SemaforoRojo),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                        ) {
+                            Text("Eliminar Foto", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showDialogFotoPerfilOpciones = false }) {
+                        Text("Cancelar", color = TextGray)
+                    }
+                },
+                containerColor = AgroCardWhite,
+                shape = RoundedCornerShape(20.dp)
+            )
+        }
+
         // ================= DIÁLOGOS =================
         if (showDialogEditarPerfil) {
             var tempNombre by remember { mutableStateOf(userName) }
             var tempRol by remember { mutableStateOf(userRole) }
-            var tempEmail by remember { mutableStateOf(userEmail) }
+            var tempEmail by remember { mutableStateOf(userEmailActual) }
 
             AlertDialog(
                 onDismissRequest = { showDialogEditarPerfil = false },
@@ -742,7 +851,7 @@ fun SettingsScreen(
                         val mail = tempEmail.trim()
                         onGuardarNombre(nom)
                         userRole = rol
-                        userEmail = mail
+                        userEmailActual = mail
                         prefs.edit()
                             .putString("user_name", nom)
                             .putString("user_role", rol)

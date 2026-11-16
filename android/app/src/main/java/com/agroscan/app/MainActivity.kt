@@ -60,7 +60,8 @@ enum class AppScreen {
     SETTINGS,
     HISTORIAL,
     CROP,
-    CAMERA
+    CAMERA,
+    ARCHIVO_COMPLETO
 }
 
 class MainActivity : ComponentActivity() {
@@ -96,6 +97,11 @@ fun AgroScanApp() {
         return if (sanitized.isNotBlank()) "historial_json_$sanitized" else "historial_json"
     }
 
+    fun getPapeleraEvalKey(email: String): String {
+        val sanitized = email.trim().lowercase().replace("@", "_").replace(".", "_")
+        return if (sanitized.isNotBlank()) "papelera_eval_json_$sanitized" else "papelera_eval_json"
+    }
+
     fun guardarBitmapMuestra(id: String, bmp: Bitmap?): String? {
         if (bmp == null) return null
         return try {
@@ -114,6 +120,8 @@ fun AgroScanApp() {
     val listaLotesCompartida = remember { mutableStateListOf<LoteItem>() }
     val papeleraLotesCompartida = remember { mutableStateListOf<LoteItem>() }
     val listaHistorialCompartida = remember { mutableStateListOf<EvaluacionHistorial>() }
+    // Papelera de auditoría: evaluaciones eliminadas (soft delete, nunca se borran físicamente)
+    val papeleraEvaluaciones = remember { mutableStateListOf<EvaluacionHistorial>() }
 
     fun cargarDatosDeUsuario(email: String) {
         listaLotesCompartida.clear()
@@ -145,12 +153,35 @@ fun AgroScanApp() {
                 listaHistorialCompartida.addAll(list)
             } catch (_: Exception) {}
         }
+
+        papeleraEvaluaciones.clear()
+        val papRaw = prefs.getString(getPapeleraEvalKey(email), null)
+        if (!papRaw.isNullOrBlank()) {
+            try {
+                val type = object : TypeToken<List<EvaluacionHistorial>>() {}.type
+                val list: List<EvaluacionHistorial> = gson.fromJson(papRaw, type) ?: emptyList()
+                papeleraEvaluaciones.addAll(list)
+            } catch (_: Exception) {}
+        }
     }
 
     // Inicializar datos al montar si el usuario ya tenía sesión abierta
     LaunchedEffect(userEmail) {
         if (userEmail.isNotBlank()) {
             cargarDatosDeUsuario(userEmail)
+        }
+    }
+
+    // Reaplicar el Modo Solar (brillo 100%) al abrir la app si el usuario lo dejó activado
+    LaunchedEffect(Unit) {
+        if (prefs.getBoolean("modo_solar_activo", false)) {
+            (context as? android.app.Activity)?.window?.let { window ->
+                val lp = android.view.WindowManager.LayoutParams()
+                lp.copyFrom(window.attributes)
+                lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                window.attributes = lp
+            }
         }
     }
 
@@ -168,6 +199,54 @@ fun AgroScanApp() {
             val json = gson.toJson(listaHistorialCompartida.toList())
             prefs.edit().putString(getHistorialKey(userEmail), json).apply()
         }
+    }
+
+    // Persistencia reactiva de la papelera de auditoría
+    LaunchedEffect(papeleraEvaluaciones.size, userEmail) {
+        if (userEmail.isNotBlank()) {
+            val json = gson.toJson(papeleraEvaluaciones.toList())
+            prefs.edit().putString(getPapeleraEvalKey(userEmail), json).apply()
+        }
+    }
+
+    fun moverEvaluacionAPapelera(evaluacion: EvaluacionHistorial, motivo: String) {
+        val ahora = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
+        listaHistorialCompartida.removeAll { it.id == evaluacion.id }
+        papeleraEvaluaciones.add(
+            0,
+            evaluacion.copy(
+                fechaEliminacion = ahora,
+                eliminadoPor = userName.ifBlank { userEmail },
+                motivoEliminacion = motivo
+            )
+        )
+        if (userEmail.isNotBlank()) {
+            prefs.edit()
+                .putString(getHistorialKey(userEmail), gson.toJson(listaHistorialCompartida.toList()))
+                .putString(getPapeleraEvalKey(userEmail), gson.toJson(papeleraEvaluaciones.toList()))
+                .apply()
+        }
+        Toast.makeText(context, "Evaluación movida a la papelera (puedes restaurarla)", Toast.LENGTH_SHORT).show()
+    }
+
+    fun restaurarEvaluacion(evaluacion: EvaluacionHistorial) {
+        papeleraEvaluaciones.removeAll { it.id == evaluacion.id }
+        val restaurada = evaluacion.copy(fechaEliminacion = null, eliminadoPor = null, motivoEliminacion = null)
+        // Reinsertar respetando el orden cronológico (más reciente primero)
+        val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+        val fechaRest = try { sdf.parse(restaurada.fechaHora)?.time ?: 0L } catch (_: Exception) { 0L }
+        val idx = listaHistorialCompartida.indexOfFirst {
+            val t = try { sdf.parse(it.fechaHora)?.time ?: 0L } catch (_: Exception) { 0L }
+            t < fechaRest
+        }
+        if (idx == -1) listaHistorialCompartida.add(restaurada) else listaHistorialCompartida.add(idx, restaurada)
+        if (userEmail.isNotBlank()) {
+            prefs.edit()
+                .putString(getHistorialKey(userEmail), gson.toJson(listaHistorialCompartida.toList()))
+                .putString(getPapeleraEvalKey(userEmail), gson.toJson(papeleraEvaluaciones.toList()))
+                .apply()
+        }
+        Toast.makeText(context, "Evaluación restaurada al historial", Toast.LENGTH_SHORT).show()
     }
 
     // Navegación principal con Pager Deslizable (Swipe Horizontal)
@@ -194,8 +273,25 @@ fun AgroScanApp() {
         }
     }
 
+    // Estado del reporte: si se abrió desde el historial (modo detalle) y a dónde volver
+    var evaluacionEnDetalle by remember { mutableStateOf<EvaluacionHistorial?>(null) }
+    var origenReporte by remember { mutableStateOf(AppScreen.HOME) }
+
+    // Volver desde el reporte SIN guardar nada (el guardado solo ocurre con el botón "Guardar")
+    fun volverDesdeReporte() {
+        val destino = origenReporte
+        evaluacionEnDetalle = null
+        origenReporte = AppScreen.HOME
+        currentScreen = destino
+    }
+
     BackHandler(enabled = (currentScreen != AppScreen.LOGIN)) {
-        if (currentScreen !in paginasPrincipales) {
+        if (currentScreen == AppScreen.REPORT) {
+            volverDesdeReporte()
+        } else if (currentScreen == AppScreen.ARCHIVO_COMPLETO) {
+            currentScreen = AppScreen.HOME
+            coroutineScope.launch { pagerState.scrollToPage(1) }
+        } else if (currentScreen !in paginasPrincipales) {
             currentScreen = AppScreen.HOME
         } else if (pagerState.currentPage != 0) {
             coroutineScope.launch { pagerState.animateScrollToPage(0) }
@@ -211,6 +307,9 @@ fun AgroScanApp() {
     fun enviarFotoAlServidor(bitmap: Bitmap) {
         selectedBitmap = bitmap
         isLoading = true
+        // Un análisis nuevo nunca está en modo detalle
+        evaluacionEnDetalle = null
+        origenReporte = AppScreen.HOME
 
         coroutineScope.launch {
             try {
@@ -296,6 +395,8 @@ fun AgroScanApp() {
                         loteInicial = currentParcela,
                         userName = userName,
                         onGuardarEvaluacion = { lote, variedad, notas ->
+                            // Protección extra: un registro abierto desde el historial jamás se vuelve a guardar
+                            if (evaluacionEnDetalle != null) return@ReportScreen
                             val nuevoEstado = when (result.semaforo.lowercase()) {
                                 "rojo" -> "Crítico"
                                 "amarillo" -> "En Revisión"
@@ -384,32 +485,14 @@ fun AgroScanApp() {
                             currentScreen = AppScreen.HOME
                         },
                         onVolver = {
-                            val yaGuardado = listaHistorialCompartida.any {
-                                it.resultado.dictamen == result.dictamen && it.resultado.madurezPorcentaje == result.madurezPorcentaje
-                            }
-                            if (!yaGuardado) {
-                                val loteActual = listaLotesCompartida.firstOrNull() ?: LoteItem(1, "Lote 1 (Parcela Norte)", "Albión", "Sector General", "Óptimo", "Sin evaluar")
-                                val evalId = UUID.randomUUID().toString()
-                                val fotoPath = guardarBitmapMuestra(evalId, selectedBitmap)
-                                val horaCompleta = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
-                                val autoEval = EvaluacionHistorial(
-                                    id = evalId,
-                                    fechaHora = horaCompleta,
-                                    loteNombre = "${loteActual.nombre} (${loteActual.ubicacion})",
-                                    variedad = loteActual.variedad,
-                                    notas = "Auto-guardado al escanear",
-                                    resultado = result,
-                                    bitmap = selectedBitmap,
-                                    fotoPath = fotoPath
-                                )
-                                listaHistorialCompartida.add(0, autoEval)
-                                if (userEmail.isNotBlank()) {
-                                    prefs.edit()
-                                        .putString(getHistorialKey(userEmail), gson.toJson(listaHistorialCompartida.toList()))
-                                        .apply()
-                                }
-                            }
-                            currentScreen = AppScreen.HOME
+                            // Sin auto-guardado: volver/descartar nunca escribe en el historial
+                            volverDesdeReporte()
+                        },
+                        evaluacionGuardada = evaluacionEnDetalle,
+                        onTomarOtraFoto = {
+                            evaluacionEnDetalle = null
+                            origenReporte = AppScreen.HOME
+                            abrirCamaraConGps()
                         }
                     )
                 }
@@ -453,6 +536,32 @@ fun AgroScanApp() {
                 }
             }
 
+            // 4.5. ARCHIVO HISTÓRICO COMPLETO
+            AppScreen.ARCHIVO_COMPLETO -> {
+                com.agroscan.app.ui.ArchivoCompletoScreen(
+                    historial = listaHistorialCompartida,
+                    lotes = listaLotesCompartida,
+                    userName = userName,
+                    onVerReporteDetalle = { evaluacionSeleccionada ->
+                        scanResult = evaluacionSeleccionada.resultado
+                        selectedBitmap = evaluacionSeleccionada.bitmap ?: if (!evaluacionSeleccionada.fotoPath.isNullOrBlank()) {
+                            try {
+                                val f = File(evaluacionSeleccionada.fotoPath)
+                                if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+                            } catch (_: Exception) { null }
+                        } else null
+                        evaluacionEnDetalle = evaluacionSeleccionada
+                        origenReporte = AppScreen.ARCHIVO_COMPLETO
+                        currentScreen = AppScreen.REPORT
+                    },
+                    onMoverAPapelera = { ev, motivo -> moverEvaluacionAPapelera(ev, motivo) },
+                    onVolver = {
+                        currentScreen = AppScreen.HOME
+                        coroutineScope.launch { pagerState.scrollToPage(1) }
+                    }
+                )
+            }
+
             // 5. NAVEGACIÓN PRINCIPAL CON DESLIZAMIENTO HORIZONTAL (SWIPE GESTURES)
             else -> {
                 Scaffold(
@@ -480,6 +589,7 @@ fun AgroScanApp() {
                         when (page) {
                             0 -> HomeScreen(
                                 userName = userName,
+                                userEmail = userEmail,
                                 parcelaActual = currentParcela,
                                 historial = listaHistorialCompartida,
                                 lotes = listaLotesCompartida,
@@ -502,7 +612,15 @@ fun AgroScanApp() {
                                             if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
                                         } catch (_: Exception) { null }
                                     } else null
+                                    evaluacionEnDetalle = evaluacionSeleccionada
+                                    origenReporte = AppScreen.HISTORIAL
                                     currentScreen = AppScreen.REPORT
+                                },
+                                papelera = papeleraEvaluaciones,
+                                onMoverAPapelera = { ev, motivo -> moverEvaluacionAPapelera(ev, motivo) },
+                                onRestaurarDePapelera = { ev -> restaurarEvaluacion(ev) },
+                                onVerTodos = {
+                                    currentScreen = AppScreen.ARCHIVO_COMPLETO
                                 },
                                 onDispararCamara = { abrirCamaraConGps() },
                                 onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
@@ -524,6 +642,12 @@ fun AgroScanApp() {
                                     currentParcela = "$loteNombre • Fresa Albión"
                                     abrirCamaraConGps()
                                 },
+                                onLotesCambiados = {
+                                    if (userEmail.isNotBlank()) {
+                                        val json = gson.toJson(listaLotesCompartida.toList())
+                                        prefs.edit().putString(getLotesKey(userEmail), json).apply()
+                                    }
+                                },
                                 onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
                                 onIrHistorial = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
                                 onIrAjustes = { coroutineScope.launch { pagerState.animateScrollToPage(3) } },
@@ -534,6 +658,7 @@ fun AgroScanApp() {
 
                             3 -> SettingsScreen(
                                 userName = userName,
+                                userEmail = userEmail,
                                 serverUrl = NetworkClient.currentBaseUrl,
                                 lotes = listaLotesCompartida,
                                 papeleraLotes = papeleraLotesCompartida,
@@ -555,6 +680,7 @@ fun AgroScanApp() {
                                     userEmail = ""
                                     listaLotesCompartida.clear()
                                     listaHistorialCompartida.clear()
+                                    papeleraEvaluaciones.clear()
                                     currentScreen = AppScreen.LOGIN
                                 },
                                 onIrInicio = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },

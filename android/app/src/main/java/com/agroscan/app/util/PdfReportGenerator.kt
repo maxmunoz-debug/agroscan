@@ -399,6 +399,313 @@ object PdfReportGenerator {
         return archivoSalida
     }
 
+    /**
+     * Genera un Informe Técnico Fitosanitario Consolidado en PDF:
+     * - Aplica los filtros activos seleccionados por el usuario (Lote, Fecha, Semáforo).
+     * - Incluye el logo oficial de AgroScan con proporciones exactas.
+     * - Resumen ejecutivo de KPIs fitosanitarios y tabla detallada de análisis.
+     */
+    fun generarReporteConsolidadoPdf(
+        context: Context,
+        evaluador: String,
+        filtroLote: String,
+        filtroSemaforo: String,
+        filtroFecha: String,
+        evaluaciones: List<EvaluacionHistorial>
+    ): File? {
+        if (evaluaciones.isEmpty()) {
+            Toast.makeText(context, "No hay evaluaciones para exportar con los filtros actuales", Toast.LENGTH_SHORT).show()
+            return null
+        }
+
+        val document = PdfDocument()
+        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4
+        val page = document.startPage(pageInfo)
+        val canvas = page.canvas
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        val textoOscuro = 0xFF0F172A.toInt()       // Slate 900
+        val textoSecundario = 0xFF334155.toInt()   // Slate 700
+        val textoMuted = 0xFF64748B.toInt()        // Slate 500
+        val fondoTarjeta = 0xFFF8FAFC.toInt()      // Slate 50
+        val bordeSuave = 0xFFCBD5E1.toInt()        // Slate 300
+        val lineaDivisoria = 0xFFE2E8F0.toInt()    // Slate 200
+
+        val verdeColor = 0xFF166534.toInt()
+        val amarilloColor = 0xFF9A3412.toInt()
+        val rojoColor = 0xFF991B1B.toInt()
+
+        val margenIzquierdo = 40f
+        val margenDerecho = 555f
+
+        // 1. CABECERA CON LOGO OFICIAL AGROSCAN
+        val logoBitmap = try {
+            BitmapFactory.decodeResource(context.resources, R.drawable.agroscan_logo)?.let { raw ->
+                val targetHeight = 44
+                val targetWidth = (raw.width * (targetHeight.toFloat() / raw.height)).toInt()
+                Bitmap.createScaledBitmap(raw, targetWidth, targetHeight, true)
+            }
+        } catch (_: Exception) { null }
+
+        if (logoBitmap != null) {
+            canvas.drawBitmap(logoBitmap, margenIzquierdo, 26f, null)
+        }
+
+        val textoX = if (logoBitmap != null) margenIzquierdo + logoBitmap.width + 12f else margenIzquierdo
+
+        paint.color = textoOscuro
+        paint.textSize = 20f
+        paint.isFakeBoldText = true
+        canvas.drawText("agroScan", textoX, 45f, paint)
+
+        paint.color = textoSecundario
+        paint.textSize = 11f
+        paint.isFakeBoldText = true
+        canvas.drawText("TECSUP", textoX + 96f, 44f, paint)
+
+        paint.color = textoMuted
+        paint.textSize = 9.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("Informe Técnico Fitosanitario Consolidado • Campaña Fresa (Fragaria x ananassa)", textoX, 60f, paint)
+
+        val horaActual = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        paint.textAlign = Paint.Align.RIGHT
+        paint.color = textoOscuro
+        paint.textSize = 9.5f
+        paint.isFakeBoldText = true
+        canvas.drawText("EMISIÓN: $horaActual", margenDerecho, 44f, paint)
+        paint.color = textoMuted
+        paint.textSize = 8.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("Evaluador: ${if (evaluador.isNotBlank()) evaluador else "Especialista Fitosanitario"}", margenDerecho, 58f, paint)
+        paint.textAlign = Paint.Align.LEFT
+
+        // Línea divisoria cabecera
+        paint.color = lineaDivisoria
+        paint.strokeWidth = 1f
+        canvas.drawLine(margenIzquierdo, 76f, margenDerecho, 76f, paint)
+
+        // 2. PARÁMETROS DEL FILTRO APLICADO
+        val filtroBoxRect = RectF(margenIzquierdo, 84f, margenDerecho, 116f)
+        paint.color = fondoTarjeta
+        paint.style = Paint.Style.FILL
+        canvas.drawRoundRect(filtroBoxRect, 6f, 6f, paint)
+
+        paint.color = bordeSuave
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 0.8f
+        canvas.drawRoundRect(filtroBoxRect, 6f, 6f, paint)
+        paint.style = Paint.Style.FILL
+
+        paint.color = textoSecundario
+        paint.textSize = 9.5f
+        paint.isFakeBoldText = true
+        canvas.drawText("Filtros Activos del Informe:", margenIzquierdo + 10f, 98f, paint)
+
+        paint.color = textoOscuro
+        paint.textSize = 9f
+        paint.isFakeBoldText = false
+        val textoFiltro = "Lote: $filtroLote   •   Condición: $filtroSemaforo   •   Período: $filtroFecha"
+        canvas.drawText(textoFiltro, margenIzquierdo + 10f, 110f, paint)
+
+        // 3. TARJETA RESUMEN DE KPIS FITOSANITARIOS
+        val total = evaluaciones.size
+        val totalOptimos = evaluaciones.count { it.resultado.semaforo.equals("verde", ignoreCase = true) }
+        val totalRevision = evaluaciones.count { it.resultado.semaforo.equals("amarillo", ignoreCase = true) }
+        val totalDescarte = evaluaciones.count { it.resultado.semaforo.equals("rojo", ignoreCase = true) }
+
+        val pctOptimos = if (total > 0) (totalOptimos * 100) / total else 0
+        val pctRevision = if (total > 0) (totalRevision * 100) / total else 0
+        val pctDescarte = if (total > 0) (totalDescarte * 100) / total else 0
+
+        val kpiBoxRect = RectF(margenIzquierdo, 124f, margenDerecho, 178f)
+        paint.color = 0xFFF1F5F9.toInt() // Slate 100
+        canvas.drawRoundRect(kpiBoxRect, 8f, 8f, paint)
+        paint.color = bordeSuave
+        paint.style = Paint.Style.STROKE
+        canvas.drawRoundRect(kpiBoxRect, 8f, 8f, paint)
+        paint.style = Paint.Style.FILL
+
+        // Métricas en 4 columnas
+        val colWidth = (margenDerecho - margenIzquierdo) / 4f
+
+        // Col 1: Total Muestras
+        var colX = margenIzquierdo + 12f
+        paint.color = textoMuted
+        paint.textSize = 8.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("TOTAL EVALUACIONES", colX, 142f, paint)
+        paint.color = textoOscuro
+        paint.textSize = 17f
+        paint.isFakeBoldText = true
+        canvas.drawText("$total", colX, 163f, paint)
+
+        // Col 2: Óptimas (Exportación)
+        colX = margenIzquierdo + colWidth + 8f
+        paint.color = verdeColor
+        paint.textSize = 8.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("ÓPTIMAS (EXPORTACIÓN)", colX, 142f, paint)
+        paint.color = verdeColor
+        paint.textSize = 16f
+        paint.isFakeBoldText = true
+        canvas.drawText("$totalOptimos ($pctOptimos%)", colX, 163f, paint)
+
+        // Col 3: En Revisión
+        colX = margenIzquierdo + (colWidth * 2) + 8f
+        paint.color = amarilloColor
+        paint.textSize = 8.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("EN REVISIÓN", colX, 142f, paint)
+        paint.color = amarilloColor
+        paint.textSize = 16f
+        paint.isFakeBoldText = true
+        canvas.drawText("$totalRevision ($pctRevision%)", colX, 163f, paint)
+
+        // Col 4: Descarte / Botrytis
+        colX = margenIzquierdo + (colWidth * 3) + 8f
+        paint.color = rojoColor
+        paint.textSize = 8.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("CRÍTICO (BOTRYTIS)", colX, 142f, paint)
+        paint.color = rojoColor
+        paint.textSize = 16f
+        paint.isFakeBoldText = true
+        canvas.drawText("$totalDescarte ($pctDescarte%)", colX, 163f, paint)
+
+        // 4. TABLA DETALLADA DE REGISTROS
+        var currentY = 196f
+        paint.color = textoOscuro
+        paint.textSize = 11f
+        paint.isFakeBoldText = true
+        canvas.drawText("REGISTRO DETALLADO DE MUESTRAS", margenIzquierdo, currentY, paint)
+
+        currentY += 12f
+        // Encabezado de la tabla
+        paint.color = 0xFFE2E8F0.toInt()
+        val thRect = RectF(margenIzquierdo, currentY, margenDerecho, currentY + 18f)
+        canvas.drawRect(thRect, paint)
+
+        paint.color = textoOscuro
+        paint.textSize = 8f
+        paint.isFakeBoldText = true
+        canvas.drawText("#", margenIzquierdo + 6f, currentY + 12f, paint)
+        canvas.drawText("FECHA / HORA", margenIzquierdo + 24f, currentY + 12f, paint)
+        canvas.drawText("LOTE / PARCELA", margenIzquierdo + 110f, currentY + 12f, paint)
+        canvas.drawText("VARIEDAD", margenIzquierdo + 230f, currentY + 12f, paint)
+        canvas.drawText("MADUREZ", margenIzquierdo + 295f, currentY + 12f, paint)
+        canvas.drawText("ESTADO", margenIzquierdo + 355f, currentY + 12f, paint)
+        canvas.drawText("DICTAMEN FITOSANITARIO", margenIzquierdo + 420f, currentY + 12f, paint)
+
+        currentY += 18f
+
+        // Filas (máximo 26 filas en la primera página A4 para ajuste perfecto)
+        val itemsAImprimir = evaluaciones.take(26)
+        itemsAImprimir.forEachIndexed { index, ev ->
+            val rowY = currentY + (index * 21f)
+            if (rowY > 770f) return@forEachIndexed
+
+            // Fondo alternado
+            if (index % 2 == 1) {
+                paint.color = 0xFFF8FAFC.toInt()
+                canvas.drawRect(margenIzquierdo, rowY, margenDerecho, rowY + 20f, paint)
+            }
+
+            // Separador suave
+            paint.color = 0xFFF1F5F9.toInt()
+            paint.strokeWidth = 0.5f
+            canvas.drawLine(margenIzquierdo, rowY + 20f, margenDerecho, rowY + 20f, paint)
+
+            val semaforo = ev.resultado.semaforo.lowercase()
+            val (cEst, textoCond) = when (semaforo) {
+                "rojo" -> Pair(rojoColor, "Crítico")
+                "amarillo" -> Pair(amarilloColor, "Revisión")
+                else -> Pair(verdeColor, "Óptimo")
+            }
+
+            paint.color = textoMuted
+            paint.textSize = 8f
+            paint.isFakeBoldText = false
+            canvas.drawText("${index + 1}", margenIzquierdo + 6f, rowY + 14f, paint)
+
+            paint.color = textoOscuro
+            canvas.drawText(ev.fechaHora.take(16), margenIzquierdo + 24f, rowY + 14f, paint)
+
+            val loteCorto = if (ev.loteNombre.length > 20) ev.loteNombre.take(18) + "..." else ev.loteNombre
+            canvas.drawText(loteCorto, margenIzquierdo + 110f, rowY + 14f, paint)
+
+            canvas.drawText(ev.variedad.take(12), margenIzquierdo + 230f, rowY + 14f, paint)
+            canvas.drawText("${ev.resultado.madurezPorcentaje}%", margenIzquierdo + 295f, rowY + 14f, paint)
+
+            // Indicador de color + estado
+            paint.color = cEst
+            canvas.drawCircle(margenIzquierdo + 360f, rowY + 11f, 3.5f, paint)
+            paint.textSize = 8f
+            paint.isFakeBoldText = true
+            canvas.drawText(textoCond, margenIzquierdo + 368f, rowY + 14f, paint)
+
+            // Dictamen fitosanitario
+            paint.color = textoSecundario
+            paint.isFakeBoldText = false
+            val dictamenCorto = if (ev.resultado.dictamen.length > 24) ev.resultado.dictamen.take(22) + "..." else ev.resultado.dictamen
+            canvas.drawText(dictamenCorto, margenIzquierdo + 420f, rowY + 14f, paint)
+        }
+
+        // 5. PIE DE PÁGINA INSTITUCIONAL Y FIRMA
+        paint.color = lineaDivisoria
+        paint.strokeWidth = 1f
+        canvas.drawLine(margenIzquierdo, 786f, margenDerecho, 786f, paint)
+
+        paint.color = textoMuted
+        paint.textSize = 8f
+        paint.isFakeBoldText = false
+        canvas.drawText("agroScan 2026 • Tecsup Investigación Tecnológica • Sistema de Detección Temprana con Visión IA", margenIzquierdo, 799f, paint)
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("Página 1 de 1", margenDerecho, 799f, paint)
+        paint.textAlign = Paint.Align.LEFT
+
+        document.finishPage(page)
+
+        // Guardar archivo y abrir
+        var archivoSalida: File? = null
+        try {
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AgroScan")
+            if (!dir.exists()) dir.mkdirs()
+            val sanitizedLote = filtroLote.replace(" ", "_").replace("(", "").replace(")", "").replace("•", "")
+            val nombreArchivo = "Reporte_Fitosanitario_${sanitizedLote}_${System.currentTimeMillis()}.pdf"
+            val file = File(dir, nombreArchivo)
+
+            FileOutputStream(file).use { out ->
+                document.writeTo(out)
+            }
+            archivoSalida = file
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, nombreArchivo)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/AgroScan")
+                }
+                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                if (uri != null) {
+                    context.contentResolver.openOutputStream(uri)?.use { os ->
+                        document.writeTo(os)
+                    }
+                }
+            }
+
+            document.close()
+            Toast.makeText(context, "Informe generado: $nombreArchivo", Toast.LENGTH_SHORT).show()
+            abrirPdfOCompartir(context, file)
+
+        } catch (e: Exception) {
+            document.close()
+            Toast.makeText(context, "Error al generar PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        }
+
+        return archivoSalida
+    }
+
     private fun drawWrappedText(
         canvas: android.graphics.Canvas,
         paint: Paint,

@@ -28,6 +28,7 @@ import androidx.compose.ui.window.Dialog
 import com.agroscan.app.data.AgroScanResult
 import com.agroscan.app.data.EvaluacionHistorial
 import com.agroscan.app.data.LoteItem
+import com.agroscan.app.data.esMuestraNoValida
 import com.agroscan.app.ui.theme.*
 import com.agroscan.app.util.PdfReportGenerator
 import java.text.SimpleDateFormat
@@ -43,11 +44,16 @@ fun ReportScreen(
     loteInicial: String = "",
     userName: String = "Evaluador",
     onGuardarEvaluacion: (lote: LoteItem, variedad: String, notas: String) -> Unit,
-    onVolver: () -> Unit
+    onVolver: () -> Unit,
+    // Modo detalle: el diagnóstico se abrió desde el Historial (ya está guardado → sin botón Guardar)
+    evaluacionGuardada: EvaluacionHistorial? = null,
+    onTomarOtraFoto: () -> Unit = onVolver
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
     var showDialogGuardar by remember { mutableStateOf(false) }
+    val esModoDetalle = evaluacionGuardada != null
+    val muestraNoValida = remember(result) { result.esMuestraNoValida() }
 
     // Buscar si ya venía un lote seleccionado o tomar el primero registrado
     val lotePorDefecto = lotes.find { loteInicial.contains(it.nombre) } ?: lotes.firstOrNull()
@@ -66,11 +72,21 @@ fun ReportScreen(
         }
     }
 
-    // Colores según semáforo devuelto por la IA
-    val (colorSemaforo, colorFondo, textoSemaforo) = when (result.semaforo.lowercase()) {
-        "rojo" -> Triple(SemaforoRojo, SemaforoRojoFondo, "ROJO - DESCARTE INMEDIATO")
-        "amarillo" -> Triple(SemaforoAmarillo, SemaforoAmarilloFondo, "AMARILLO - ATENCIÓN / PULPA")
+    // Colores según semáforo devuelto por la IA (neutral si la imagen no es una fresa)
+    val (colorSemaforo, colorFondo, textoSemaforo) = when {
+        muestraNoValida -> Triple(NeutralGris, NeutralGrisFondo, "MUESTRA NO VÁLIDA • NO ES UNA FRESA")
+        result.semaforo.lowercase() == "rojo" -> Triple(SemaforoRojo, SemaforoRojoFondo, "ROJO - DESCARTE INMEDIATO")
+        result.semaforo.lowercase() == "amarillo" -> Triple(SemaforoAmarillo, SemaforoAmarilloFondo, "AMARILLO - ATENCIÓN / PULPA")
         else -> Triple(SemaforoVerde, SemaforoVerdeFondo, "VERDE - ÓPTIMO / EXPORTACIÓN")
+    }
+
+    // Subtítulo: en modo detalle se muestran los datos del registro guardado
+    val subtituloTopBar = if (evaluacionGuardada != null) {
+        "${evaluacionGuardada.loteNombre} • ${evaluacionGuardada.fechaHora}"
+    } else if (loteSeleccionado != null) {
+        "${loteSeleccionado!!.nombre} • Fresa $variedadSeleccionada"
+    } else {
+        "Fresa $variedadSeleccionada"
     }
 
     Scaffold(
@@ -80,9 +96,11 @@ fun ReportScreen(
                     Column {
                         Text("Diagnóstico AgroScan", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (loteSeleccionado != null) "${loteSeleccionado!!.nombre} • Fresa $variedadSeleccionada" else "Fresa $variedadSeleccionada",
+                            text = subtituloTopBar,
                             fontSize = 12.sp,
-                            color = TextGray
+                            color = TextGray,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                     }
                 },
@@ -175,7 +193,7 @@ fun ReportScreen(
                             text = result.fruta,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = AgroGreenPrimary
+                            color = if (muestraNoValida) TextDark else AgroGreenPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -195,7 +213,7 @@ fun ReportScreen(
                             color = colorFondo
                         ) {
                             Text(
-                                text = result.dictamen,
+                                text = if (muestraNoValida) "Muestra no válida" else result.dictamen,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorSemaforo,
@@ -218,7 +236,11 @@ fun ReportScreen(
                         Icon(
                             imageVector = Icons.Default.Coronavirus,
                             contentDescription = "Patógeno",
-                            tint = if (result.semaforo == "rojo") SemaforoRojo else AgroGreenPrimary,
+                            tint = when {
+                                muestraNoValida -> NeutralGris
+                                result.semaforo == "rojo" -> SemaforoRojo
+                                else -> AgroGreenPrimary
+                            },
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -246,6 +268,63 @@ fun ReportScreen(
                 }
             }
 
+            if (muestraNoValida) {
+                // 4-B. GUÍA DE CAPTURA (en lugar de fungicidas cuando la imagen no es una fresa)
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = AgroCardWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CameraAlt,
+                                contentDescription = "Guía de captura",
+                                tint = AgroGreenPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Guía de Captura",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = TextDark
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "No se aplican tratamientos porque la imagen no corresponde a una fresa. Para un diagnóstico válido:",
+                            fontSize = 12.sp,
+                            color = TextGray,
+                            lineHeight = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        listOf(
+                            "Enfoca una sola fresa real (Fragaria x ananassa), ocupando la mayor parte del recuadro.",
+                            "Usa luz natural y evita sombras fuertes o contraluz.",
+                            "Mantén el celular estable a unos 15–25 cm del fruto.",
+                            "Evita fotografiar pantallas, dibujos o imágenes impresas."
+                        ).forEach { consejo ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = AgroGreenPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = consejo, fontSize = 12.sp, color = TextDark, lineHeight = 16.sp)
+                            }
+                        }
+                    }
+                }
+            } else {
             // 4. TRATAMIENTO Y FUNGICIDAS RECOMENDADOS
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -331,48 +410,124 @@ fun ReportScreen(
                 }
             }
 
-            // 6. Botón de Guardar que abre el diálogo de registro
-            Button(
-                onClick = { showDialogGuardar = true },
-                colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-            ) {
-                Icon(Icons.Default.Save, contentDescription = "Guardar")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Guardar y Registrar Evaluación", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            } // fin de tarjetas agronómicas (solo para fresas válidas)
+
+            // 6. BOTONES DE ACCIÓN (sin guardado automático: solo se guarda al tocar "Guardar")
+            if (esModoDetalle) {
+                // Registro ya guardado → solo lectura: aviso + exportar PDF
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = AgroCardWhite,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AgroCardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Verified, contentDescription = null, tint = AgroGreenPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Registro guardado en el historial",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextDark
+                            )
+                            if (!evaluacionGuardada?.notas.isNullOrBlank()) {
+                                Text(
+                                    text = "Notas: ${evaluacionGuardada?.notas}",
+                                    fontSize = 11.5.sp,
+                                    color = TextGray
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (muestraNoValida) {
+                // Imagen no es una fresa → no tiene sentido guardarla en el historial fitosanitario
+                Button(
+                    onClick = onTomarOtraFoto,
+                    colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                ) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Tomar otra foto", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = onVolver,
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, AgroCardBorder),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextGray),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Descartar y volver al inicio", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Button(
+                    onClick = { showDialogGuardar = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = AgroGreenPrimary),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = "Guardar")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Guardar Evaluación", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
-            // 7. Botón de Exportar Ficha Técnica en PDF
-            OutlinedButton(
-                onClick = {
-                    val horaActual = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
-                    val evaluacionTemp = EvaluacionHistorial(
-                        fechaHora = horaActual,
-                        loteNombre = loteSeleccionado?.nombre ?: "Lote 1",
-                        variedad = variedadSeleccionada,
-                        notas = notasEvaluador,
-                        resultado = result,
-                        bitmap = imageBitmap
-                    )
-                    PdfReportGenerator.generarYDescargarPdf(
-                        context = context,
-                        evaluador = userName,
-                        evaluacion = evaluacionTemp
-                    )
-                },
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, AgroGreenPrimary),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = AgroGreenPrimary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-            ) {
-                Icon(Icons.Default.PictureAsPdf, contentDescription = "PDF", tint = AgroGreenPrimary)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Exportar Ficha Técnica en PDF", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            // 7. Exportar Ficha Técnica en PDF (no aplica a muestras no válidas recién escaneadas)
+            if (esModoDetalle || !muestraNoValida) {
+                OutlinedButton(
+                    onClick = {
+                        val evaluacionPdf = evaluacionGuardada?.let { it.copy(bitmap = it.bitmap ?: imageBitmap) }
+                            ?: EvaluacionHistorial(
+                                fechaHora = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date()),
+                                loteNombre = loteSeleccionado?.nombre ?: "Lote 1",
+                                variedad = variedadSeleccionada,
+                                notas = notasEvaluador,
+                                resultado = result,
+                                bitmap = imageBitmap
+                            )
+                        PdfReportGenerator.generarYDescargarPdf(
+                            context = context,
+                            evaluador = userName,
+                            evaluacion = evaluacionPdf
+                        )
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, AgroGreenPrimary),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AgroGreenPrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = "PDF", tint = AgroGreenPrimary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Exportar Ficha Técnica en PDF", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Descartar explícito (solo para análisis nuevos de fresas válidas)
+            if (!esModoDetalle && !muestraNoValida) {
+                TextButton(
+                    onClick = onVolver,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null, tint = TextGray, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Descartar sin guardar", color = TextGray, fontSize = 13.sp)
+                }
             }
         }
 

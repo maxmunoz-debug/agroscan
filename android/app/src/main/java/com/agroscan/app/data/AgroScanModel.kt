@@ -65,8 +65,34 @@ data class EvaluacionHistorial(
     @Transient var bitmap: Bitmap? = null,
     val fotoPath: String? = null,
     val latitud: Double? = null,
-    val longitud: Double? = null
+    val longitud: Double? = null,
+    // Trazabilidad de auditoría (Papelera / Soft Delete): el registro nunca se borra físicamente
+    val fechaEliminacion: String? = null,
+    val eliminadoPor: String? = null,
+    val motivoEliminacion: String? = null
 )
+
+/**
+ * Indica si la IA determinó que la imagen NO corresponde a una fresa
+ * (ej. un dibujo, una persona u otro objeto). En ese caso la muestra no es válida
+ * y no debe tratarse como un descarte fitosanitario.
+ */
+fun AgroScanResult.esMuestraNoValida(): Boolean {
+    val f = fruta.lowercase()
+    val textoIA = "$dictamen $defectosDetectados".lowercase()
+    val negaciones = listOf(
+        "no corresponde", "no es ", "no es una", "no se detecta", "no contiene",
+        "no identificad", "no válid", "no valid", "desconocid", "sin fresa"
+    )
+    val frutaNoEsFresa = !(f.contains("fresa") || f.contains("frutilla") || f.contains("strawberr"))
+    val frutaNegada = negaciones.any { f.contains(it) }
+    val iaIndicaObjetoErroneo = textoIA.contains("error de objeto") ||
+            textoIA.contains("no contiene una fresa") ||
+            textoIA.contains("no es una fresa") ||
+            textoIA.contains("no corresponde a fresa") ||
+            textoIA.contains("no corresponde a una fresa")
+    return frutaNoEsFresa || frutaNegada || iaIndicaObjetoErroneo
+}
 
 // Modelo para los mensajes del Chatbot Asistente Agrónomo
 data class MensajeChat(
