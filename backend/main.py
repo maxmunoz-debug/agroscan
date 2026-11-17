@@ -7,7 +7,8 @@ import hashlib
 from datetime import datetime
 import requests
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -94,6 +95,20 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_fecha ON evaluaciones(id DESC);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_lote ON evaluaciones(lote_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotes_usuario ON lotes(usuario_email);")
+
+    # Tabla de Estado del Dispositivo IoT Cloud (ESP32-CAM Tecsup vinculado a investigacion@tecsup.edu.pe)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS dispositivo_cloud (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        device_id TEXT DEFAULT 'AGRO-CAM-TECSUP-01',
+        usuario_email TEXT DEFAULT 'investigacion@tecsup.edu.pe',
+        shot_id INTEGER DEFAULT 0,
+        timestamp TEXT DEFAULT '',
+        pending_trigger INTEGER DEFAULT 0,
+        imagen_blob BLOB
+    )
+    """)
+    cursor.execute("INSERT OR IGNORE INTO dispositivo_cloud (id, device_id, usuario_email, shot_id, timestamp, pending_trigger) VALUES (1, 'AGRO-CAM-TECSUP-01', 'investigacion@tecsup.edu.pe', 0, '', 0)")
 
     conn.commit()
     conn.close()
@@ -582,3 +597,136 @@ async def chat_agronomo(request: ChatRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el asistente agrónomo: {str(e)}")
+
+
+# ================= ARQUITECTURA CLOUD IoT: CÁMARA ESP32-CAM TECSUP =================
+@app.post("/dispositivo/captura")
+async def dispositivo_subir_captura(
+    request: Request,
+    device_id: str = "AGRO-CAM-TECSUP-01",
+    usuario: str = "investigacion@tecsup.edu.pe"
+):
+    """
+    Recibe una fotografía JPEG directamente desde la ESP32-CAM en campo (cuerpo binario crudo o multipart)
+    y la vincula al nodo oficial de investigación (investigacion@tecsup.edu.pe).
+    """
+    try:
+        content_type = request.headers.get("content-type", "").lower()
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            archivo = form.get("file") or form.get("image")
+            if archivo is None:
+                raise HTTPException(status_code=400, detail="No se encontró archivo en multipart")
+            raw_bytes = await archivo.read()
+        else:
+            raw_bytes = await request.body()
+
+        if not raw_bytes or len(raw_bytes) < 100:
+            raise HTTPException(status_code=400, detail="Imagen vacía o incompleta desde ESP32-CAM")
+
+        # Normalizar y validar como JPEG limpio
+        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        img.thumbnail((1280, 1280))
+        out_buf = io.BytesIO()
+        img.save(out_buf, format="JPEG", quality=88)
+        jpeg_bytes = out_buf.getvalue()
+
+        ahora = datetime.now().strftime("%d/%m/%Y %I:%M:%S %p")
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE dispositivo_cloud
+            SET device_id = ?,
+                usuario_email = ?,
+                shot_id = shot_id + 1,
+                timestamp = ?,
+                pending_trigger = 0,
+                imagen_blob = ?
+            WHERE id = 1
+        """, (device_id.strip(), usuario.strip().lower(), ahora, jpeg_bytes))
+        cursor.execute("SELECT shot_id FROM dispositivo_cloud WHERE id = 1")
+        nuevo_shot_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "ok",
+            "shot_id": nuevo_shot_id,
+            "device_id": device_id,
+            "usuario_email": usuario,
+            "timestamp": ahora,
+            "bytes": len(jpeg_bytes)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando captura de cámara IoT: {str(e)}")
+
+
+@app.get("/dispositivo/status")
+def dispositivo_status(usuario: str = "investigacion@tecsup.edu.pe"):
+    """
+    Consulta rápida (<1KB) para que la App Android detecte nuevos disparos físicos en la nube
+    y para que la ESP32-CAM verifique si se le ordenó un disparo remoto desde la App.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT device_id, usuario_email, shot_id, timestamp, pending_trigger, LENGTH(imagen_blob) as img_len FROM dispositivo_cloud WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {
+            "status": "ok",
+            "device_id": "AGRO-CAM-TECSUP-01",
+            "usuario_email": "investigacion@tecsup.edu.pe",
+            "shot_id": 0,
+            "timestamp": "",
+            "pending_trigger": False,
+            "has_image": False
+        }
+    return {
+        "status": "ok",
+        "device_id": row["device_id"],
+        "usuario_email": row["usuario_email"],
+        "shot_id": row["shot_id"],
+        "timestamp": row["timestamp"],
+        "pending_trigger": bool(row["pending_trigger"]),
+        "has_image": bool(row["img_len"] and row["img_len"] > 0)
+    }
+
+
+@app.get("/dispositivo/last")
+def dispositivo_last():
+    """
+    Descarga la última fotografía JPEG capturada por la cámara IoT vinculada en la nube.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT imagen_blob FROM dispositivo_cloud WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="Aún no hay captura registrada desde la cámara Cloud")
+    return Response(content=row[0], media_type="image/jpeg")
+
+
+@app.post("/dispositivo/ordenar-captura")
+def dispositivo_ordenar_captura(device_id: str = "AGRO-CAM-TECSUP-01"):
+    """
+    Permite a la App Android ordenar un disparo con flash a la ESP32-CAM a través de la nube.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE dispositivo_cloud SET pending_trigger = 1 WHERE id = 1")
+    cursor.execute("SELECT shot_id FROM dispositivo_cloud WHERE id = 1")
+    shot_actual = cursor.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return {
+        "status": "ok",
+        "mensaje": "Orden de disparo enviada a la cámara Cloud",
+        "device_id": device_id,
+        "shot_id_actual": shot_actual
+    }
+
