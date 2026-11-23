@@ -494,7 +494,7 @@ async def analizar_fruta(file: UploadFile = File(...)):
         base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         prompt = """
-        Eres el motor de visión artificial de 'AgroScan', un sistema de inspección de calidad y fitopatología en fresas (Fragaria x ananassa) para Tecsup.
+        Eres el motor de visión artificial de 'AgroScan', un sistema de inspección de calidad y fitopatología agrícola para Tecsup (especialista principal en fresas Fragaria x ananassa, pero con soporte multi-fruta para cualquier fruta agrícola).
         Analiza detalladamente la fruta en esta imagen.
         
         Debes responder ÚNICAMENTE con un objeto JSON válido con la siguiente estructura exacta:
@@ -510,10 +510,13 @@ async def analizar_fruta(file: UploadFile = File(...)):
             "medidas_preventivas": ["Control de humedad < 65%", "Retiro de follaje senescente"]
         }
 
-        Reglas para el campo 'semaforo':
-        - "verde": Fruta óptima, firme, color adecuado, sin enfermedades (Apta exportación).
-        - "amarillo": Fruta muy madura, pintona o con defectos estéticos leves pero sin hongos (Mercado local / pulpa).
-        - "rojo": Fruta con moho (Botrytis cinerea), podredumbre gris, insectos o daño severo (Descarte inmediato).
+        Reglas importantes:
+        1. Si la imagen contiene una Fresa O CUALQUIER OTRA FRUTA REAL (Manzana, Mandarina, Naranja, Plátano, Arándano, Uva, Mango, Pera, Durazno, Limón, Tomate, etc.), coloca el nombre real de la fruta en "fruta" y evalúa normalmente su madurez, color, defectos, semáforo ("verde", "amarillo" o "rojo"), dictamen, recomendación y manejo fitosanitario acorde a esa fruta.
+        2. ÚNICAMENTE si en la imagen NO hay ninguna fruta (ej. una persona, pared, mesa, laptop u objeto inanimado), coloca "fruta": "Objeto no válido", "madurez_porcentaje": 0, "semaforo": "rojo", "dictamen": "Muestra no válida: no es una fruta", "defectos_detectados": "La imagen capturada no contiene ninguna fruta para evaluación fitosanitaria.".
+        3. Reglas para el campo 'semaforo' en frutas válidas:
+           - "verde": Fruta óptima, firme, color adecuado, sin enfermedades (Apta exportación / consumo óptimo).
+           - "amarillo": Fruta muy madura, pintona o con defectos estéticos leves pero sin hongos (Mercado local / pulpa).
+           - "rojo": Fruta con moho (Botrytis cinerea u otros hongos), podredumbre, insectos o daño severo (Descarte inmediato).
         """
 
         url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
